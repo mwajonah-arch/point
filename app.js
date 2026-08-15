@@ -46,13 +46,22 @@ async function invokeFn(name, options) {
   const { data, error } = await supabase.functions.invoke(name, options);
   if (error) {
     let message = error.message || 'Something went wrong. Please try again.';
+    let body = null;
     try {
-      const body = await error.context.json();
+      body = await error.context.json();
       if (body && body.error) message = body.error;
     } catch (e) {
       // Response wasn't JSON (e.g. a network failure) — keep the generic message.
     }
-    return { data: null, error: { message } };
+    // A response that couldn't be parsed as JSON at all (error.context has
+    // no usable body) means the request never really reached the function
+    // — a genuine connectivity failure, worth retrying later. A response
+    // that DID parse as JSON is the function deliberately rejecting the
+    // request (bad PIN, out of stock, expired session) — retrying that
+    // later would just fail the same way again, so callers that need to
+    // decide "queue for retry" vs "this is a real rejection" can check
+    // `network` here instead of guessing from the message text.
+    return { data: null, error: { message, network: !body }, body };
   }
   return { data, error: null };
 }
@@ -116,7 +125,7 @@ function expiryLabel(days) {
 /* reports it's back online — until they successfully sync.               */
 /* ---------------------------------------------------------------------- */
 
-const STORE_KEYS = ['inventory', 'sales', 'staff', 'settings', 'inventoryLog'];
+const STORE_KEYS = ['sales', 'staff', 'settings', 'inventoryLog'];
 const CACHE_PREFIX = 'pos_cache_';
 const DIRTY_PREFIX = 'pos_dirty_';
 const TOKEN_KEY = 'pos_session_token';
@@ -178,6 +187,86 @@ function isDirty(key) {
 }
 function getDirtyKeys() {
   return STORE_KEYS.filter(isDirty);
+}
+
+// Offline queue for the two new per-row inventory writes (stock decrements
+// at checkout, admin product upserts/deletes). These don't fit the
+// existing whole-blob markDirty/flushDirtyKeys mechanism above — each
+// entry here is one specific action to retry, not "this whole key is
+// stale" — so they get their own small queue, flushed the same way
+// (on reconnect and by the same background poll).
+const PENDING_INVENTORY_KEY = 'pos_pending_inventory_actions';
+
+function getPendingInventoryActions() {
+  try { return JSON.parse(localStorage.getItem(PENDING_INVENTORY_KEY) || '[]'); }
+  catch (e) { return []; }
+}
+function setPendingInventoryActions(actions) {
+  try { localStorage.setItem(PENDING_INVENTORY_KEY, JSON.stringify(actions)); }
+  catch (e) { /* ignore */ }
+}
+function hasPendingInventoryActions() {
+  return getPendingInventoryActions().length > 0;
+}
+function queueInventoryAction(action) {
+  setPendingInventoryActions([...getPendingInventoryActions(), action]);
+}
+
+async function flushPendingInventoryActions() {
+  const actions = getPendingInventoryActions();
+  if (actions.length === 0) return;
+  const remaining = [];
+  for (const action of actions) {
+    try {
+      const { error } = action.type === 'adjust-stock'
+        ? await invokeFn('adjust-stock', { body: { token: sessionToken, items: action.items, direction: action.direction } })
+        : await invokeFn('manage-inventory', { body: { token: sessionToken, action: action.type, product: action.product, id: action.id } });
+      // Only a genuine connectivity failure gets requeued. A real
+      // rejection (out of stock, expired session, bad fields) will fail
+      // the exact same way every time it's retried, so requeuing it would
+      // just leave it stuck in the pending count forever — surface it
+      // once via console.error instead and drop it.
+      if (error && error.network) {
+        remaining.push(action);
+      } else if (error) {
+        console.error('Inventory action rejected, not retrying:', action, error.message);
+      }
+    } catch (e) {
+      remaining.push(action); // still offline — keep it queued
+    }
+  }
+  setPendingInventoryActions(remaining);
+}
+
+// Row <-> product shape mapping for the 'inventory' table (snake_case
+// columns in Postgres, camelCase fields everywhere in the UI).
+function rowToProduct(r) {
+  return {
+    id: r.id, name: r.name, category: r.category, sku: r.sku,
+    price: Number(r.price), stock: Number(r.stock),
+    reorderLevel: Number(r.reorder_level), expiry: r.expiry || '',
+    requiresRx: Boolean(r.requires_rx),
+  };
+}
+
+async function getInventoryRows() {
+  // Same dirty-first pattern as getOrInit: while there's an unsynced local
+  // change queued (see flushPendingInventoryActions), trust what's on
+  // screen instead of overwriting it with a server read that predates it.
+  if (hasPendingInventoryActions()) {
+    const cached = readCache('inventory');
+    if (cached !== null) return cached;
+  }
+  try {
+    const { data, error } = await supabase.from('inventory').select('*');
+    if (error) throw error;
+    const products = (data || []).map(rowToProduct);
+    writeCache('inventory', products);
+    return products;
+  } catch (e) {
+    console.error('inventory read failed, using local cache', e);
+    return readCache('inventory') || DEFAULT_INVENTORY;
+  }
 }
 
 async function getOrInit(key, defaultValue) {
@@ -2877,12 +2966,13 @@ function App() {
   const pollRef = useRef(null);
   const sessionRestored = useRef(false);
 
-  const refreshPending = () => setPendingCount(getDirtyKeys().length);
+  const refreshPending = () => setPendingCount(getDirtyKeys().length + getPendingInventoryActions().length);
 
   const loadAll = useCallback(async () => {
     await flushDirtyKeys();
+    await flushPendingInventoryActions();
     const [inv, sls, stf, cfg, invLog] = await Promise.all([
-      getOrInit('inventory', DEFAULT_INVENTORY),
+      getInventoryRows(),
       getOrInit('sales', []),
       getOrInit('staff', DEFAULT_STAFF),
       getOrInit('settings', DEFAULT_SETTINGS),
@@ -2897,10 +2987,14 @@ function App() {
   useEffect(() => {
     loadAll();
 
-    // Instant sync: any device that writes to kv_store pushes an update here.
+    // Instant sync: any device that writes to kv_store or inventory pushes
+    // an update here.
     const channel = supabase
       .channel('kv_store_changes')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'kv_store' }, () => {
+        loadAll();
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'inventory' }, () => {
         loadAll();
       })
       .subscribe();
@@ -2994,8 +3088,39 @@ function App() {
   }, [user, settings.sessionTimeoutMinutes]);
 
   const saveInventory = async (next) => {
+    // Diff against what's currently loaded so InventoryTab's existing
+    // "compute the whole next array" style keeps working unchanged — this
+    // is the only place that translates it into the per-row calls the new
+    // table actually needs.
+    const prevById = new Map(inventory.map((p) => [p.id, p]));
+    const nextById = new Map(next.map((p) => [p.id, p]));
+    const actions = [];
+    for (const [id, product] of nextById) {
+      const before = prevById.get(id);
+      if (!before || JSON.stringify(before) !== JSON.stringify(product)) {
+        actions.push({ type: 'upsert', product });
+      }
+    }
+    for (const id of prevById.keys()) {
+      if (!nextById.has(id)) actions.push({ type: 'delete', id });
+    }
+
+    // Optimistic UI: reflect the edit immediately regardless of network.
     setInventory(next);
-    await saveShared('inventory', next);
+    writeCache('inventory', next);
+
+    for (const action of actions) {
+      try {
+        const { error } = await invokeFn('manage-inventory', {
+          body: { token: sessionToken, action: action.type, product: action.product, id: action.id },
+        });
+        if (error && error.network) queueInventoryAction(action);
+        else if (error) console.error('Inventory edit rejected:', action, error.message);
+      } catch (e) {
+        queueInventoryAction(action);
+      }
+    }
+    refreshPending();
     setLastSynced(new Date().toLocaleTimeString());
   };
   const logInventoryChange = async ({ action, productName, sku, detail }) => {
@@ -3027,12 +3152,37 @@ function App() {
     setLastSynced(new Date().toLocaleTimeString());
   };
   const updateStock = async (items) => {
+    // Optimistic UI: the sale already happened at the till, so reflect the
+    // new stock immediately. The atomic decrement below is what makes the
+    // *server's* number correct even if two tills do this at once — this
+    // local update is just so the cashier isn't staring at stale numbers.
     const next = inventory.map((p) => {
       const sold = items.find((i) => i.id === p.id);
       return sold ? { ...p, stock: Math.max(0, p.stock - sold.qty) } : p;
     });
     setInventory(next);
-    await saveShared('inventory', next);
+    writeCache('inventory', next);
+
+    try {
+      const { error } = await invokeFn('adjust-stock', { body: { token: sessionToken, items } });
+      if (error) {
+        if (error.network) {
+          // Offline — queue it, retried automatically once back online.
+          queueInventoryAction({ type: 'adjust-stock', items });
+          refreshPending();
+        } else {
+          // A real rejection — most likely someone else already sold the
+          // last unit between this device's last sync and this sale. The
+          // sale itself already went through (addSale ran separately), so
+          // this isn't blocked at checkout — it's surfaced here so it
+          // doesn't just vanish silently.
+          console.error('Stock adjustment rejected (not retried):', error.message);
+        }
+      }
+    } catch (e) {
+      queueInventoryAction({ type: 'adjust-stock', items });
+      refreshPending();
+    }
   };
 
   // Reverses a completed sale: marks it voided (kept in the record for the
@@ -3052,12 +3202,24 @@ function App() {
     setSales(nextSales);
     await saveShared('sales', nextSales);
 
+    const restockItems = sale.items.map((i) => ({ id: i.id, qty: i.qty }));
     const nextInventory = inventory.map((p) => {
       const found = sale.items.find((i) => i.id === p.id);
       return found ? { ...p, stock: p.stock + found.qty } : p;
     });
     setInventory(nextInventory);
-    await saveShared('inventory', nextInventory);
+    writeCache('inventory', nextInventory);
+    try {
+      const { error } = await invokeFn('adjust-stock', {
+        body: { token: sessionToken, items: restockItems, direction: 'increment' },
+      });
+      if (error) {
+        if (error.network) queueInventoryAction({ type: 'adjust-stock', items: restockItems, direction: 'increment' });
+        else console.error('Restock on void rejected:', error.message);
+      }
+    } catch (e) {
+      queueInventoryAction({ type: 'adjust-stock', items: restockItems, direction: 'increment' });
+    }
 
     setLastSynced(new Date().toLocaleTimeString());
     return true;

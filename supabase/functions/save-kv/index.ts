@@ -5,8 +5,12 @@ import { verifySession, CORS_HEADERS, jsonResponse } from '../_shared/session.ts
 const supabase = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
 const SESSION_SECRET = Deno.env.get('SESSION_SECRET')!
 
-// Must match STORE_KEYS in app.js exactly.
-const STORE_KEYS = ['inventory', 'sales', 'staff', 'settings', 'inventoryLog']
+// Must match STORE_KEYS in app.js exactly. 'inventory' used to live here
+// too, before it moved to its own table with atomic per-row updates (see
+// adjust-stock and manage-inventory) — deliberately excluded now so
+// nothing can accidentally write inventory back into this blob and
+// reintroduce the whole-array overwrite race that caused the oversell bug.
+const STORE_KEYS = ['sales', 'staff', 'settings', 'inventoryLog']
 // Only an admin session may write these two — everyone else is limited to
 // the day-to-day operational keys (inventory, sales, inventoryLog).
 const ADMIN_ONLY_KEYS = ['staff', 'settings']
