@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title> Medipoint — Point of Sale</title>
+  <style>
+    html, body, #root { height: 100%; margin: 0; padding: 0; }
+    body { background: #EEF1EA; }
+  </style>
+</head>
+<body>
+  <div id="root">
+    <div style="min-height:100vh;display:flex;align-items:center;justify-content:center;font-family:sans-serif;color:#6B776E;">
+      Loading…
+    </div>
+  </div>
+
+  <!-- Your two Supabase keys live here — the only file you need to edit. -->
+  <script src="config.js"></script>
+
+  <!-- Lets the browser run JSX / ES module syntax with no build step. -->
+  <script src="https://unpkg.com/@babel/standalone@7/babel.min.js"></script>
+
+  <script type="text/babel" data-type="module" data-presets="react" src="app.js"></script>
+</body>
+</html>

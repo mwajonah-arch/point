@@ -1,0 +1,33 @@
+# Supabase local development
+.supabase/
+
+# Environment and configuration files
+config.js
+.env
+.env.local
+.env.*.local
+
+# Dependency directories (if Node is used for local tools/http-server)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# IDE and Editor files
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+dist/

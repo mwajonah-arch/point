@@ -1,0 +1,25 @@
+{
+  "name": "medipoint",
+  "version": "1.0.0",
+  "description": "Medipoint Point of Sale System",
+  "main": "index.html",
+  "scripts": {
+    "dev": "node server.js",
+    "start": "node server.js",
+    "build": "node build.js",
+    "preview": "node server.js",
+    "lint": "eslint . --ext .js,.jsx"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "@supabase/supabase-js": "^2.0.0",
+    "lucide-react": "^0.383.0"
+  },
+  "devDependencies": {
+    "eslint": "^8.0.0",
+    "eslint-plugin-react": "^7.0.0",
+    "eslint-plugin-react-hooks": "^4.0.0"
+  }
+}
