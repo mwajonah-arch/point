@@ -358,6 +358,24 @@ function useBarcodeScanner(onScan, enabled) {
 // "use a hardware scanner instead" message rather than failing silently.
 const BARCODE_FORMATS = ['ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_128', 'code_39', 'qr_code'];
 
+// Without an explicit focusMode hint, some phones (mainly Android/Chrome)
+// do a single focus pass when the camera opens instead of continuously
+// refocusing as it's moved into position over a barcode — that's what
+// shows up as a slow, blurry focus right after the scanner opens.
+// 'advanced' constraints are best-effort: browsers that don't support
+// focusMode (Safari) just ignore this entry rather than failing the
+// whole getUserMedia call. A capped ideal resolution also helps here —
+// it's plenty for barcode decoding and autofocus settles faster on a
+// smaller frame than it does hunting across a full-res feed.
+const CAMERA_CONSTRAINTS = {
+  video: {
+    facingMode: 'environment',
+    width: { ideal: 1280 },
+    height: { ideal: 720 },
+    advanced: [{ focusMode: 'continuous' }],
+  },
+};
+
 function BarcodeScannerModal({ onDetect, onClose }) {
   const videoRef = useRef(null);
   const [error, setError] = useState('');
@@ -387,7 +405,7 @@ function BarcodeScannerModal({ onDetect, onClose }) {
 
     const runNative = async () => {
       const detector = new window.BarcodeDetector({ formats: BARCODE_FORMATS });
-      stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+      stream = await navigator.mediaDevices.getUserMedia(CAMERA_CONSTRAINTS);
       if (cancelled) { stream.getTracks().forEach((t) => t.stop()); return; }
       videoRef.current.srcObject = stream;
       await videoRef.current.play();
@@ -423,7 +441,7 @@ function BarcodeScannerModal({ onDetect, onClose }) {
       const codeReader = new BrowserMultiFormatReader(hints);
       setMode('zxing');
       zxingControls = await codeReader.decodeFromConstraints(
-        { video: { facingMode: 'environment' } },
+        CAMERA_CONSTRAINTS,
         videoRef.current,
         (result) => { if (result) fire(result.getText()); }
       );
