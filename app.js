@@ -1375,7 +1375,10 @@ function DrugInfoModal({ product, onClose }) {
   const [state, setState] = useState('loading'); // loading | done | error
   const [info, setInfo] = useState(null);
   const [error, setError] = useState('');
-  const cacheKey = 'pos_drug_info_' + product.name.toLowerCase().trim();
+  // v2: bumped when the response shape changes (added drugClass,
+  // contraindications) so anyone with an old cached lookup gets a fresh
+  // one instead of seeing blank fields for the new keys.
+  const cacheKey = 'pos_drug_info_v2_' + product.name.toLowerCase().trim();
 
   useEffect(() => {
     let cancelled = false;
@@ -1443,8 +1446,10 @@ function DrugInfoModal({ product, onClose }) {
             {info.notARealDrug && (
               <p style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 12, fontStyle: 'italic' }}>This doesn't look like a medicine — showing what I could find anyway.</p>
             )}
+            <Field label="Drug class" value={info.drugClass} />
             <Field label="Typical dosage" value={info.dosage} />
             <Field label="Common side effects" value={info.sideEffects} />
+            <Field label="Contraindications" value={info.contraindications} />
             <Field label="Interactions" value={info.interactions} />
             <Field label="Other considerations" value={info.considerations} />
             <div style={{ marginTop: 4, padding: 10, background: 'var(--amber-pale)', borderRadius: 8, fontSize: 11.5, color: '#5C3A12', lineHeight: 1.4 }}>
