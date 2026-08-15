@@ -125,7 +125,7 @@ function expiryLabel(days) {
 /* reports it's back online — until they successfully sync.               */
 /* ---------------------------------------------------------------------- */
 
-const STORE_KEYS = ['sales', 'staff', 'settings', 'inventoryLog'];
+const STORE_KEYS = ['staff', 'settings', 'inventoryLog'];
 const CACHE_PREFIX = 'pos_cache_';
 const DIRTY_PREFIX = 'pos_dirty_';
 const TOKEN_KEY = 'pos_session_token';
@@ -189,38 +189,51 @@ function getDirtyKeys() {
   return STORE_KEYS.filter(isDirty);
 }
 
-// Offline queue for the two new per-row inventory writes (stock decrements
-// at checkout, admin product upserts/deletes). These don't fit the
-// existing whole-blob markDirty/flushDirtyKeys mechanism above — each
-// entry here is one specific action to retry, not "this whole key is
-// stale" — so they get their own small queue, flushed the same way
-// (on reconnect and by the same background poll).
+// Offline queue for the per-row writes: stock decrements at checkout,
+// admin product upserts/deletes, and now sale insert/void/settle too.
+// These don't fit the existing whole-blob markDirty/flushDirtyKeys
+// mechanism above — each entry here is one specific action to retry, not
+// "this whole key is stale" — so they get their own small queue, flushed
+// the same way (on reconnect and by the same background poll). Started
+// out inventory-only (hence the localStorage key name, kept as-is so any
+// already-queued actions on a device aren't dropped by this change);
+// record-sale actions now share it too.
 const PENDING_INVENTORY_KEY = 'pos_pending_inventory_actions';
 
-function getPendingInventoryActions() {
+function getPendingSyncActions() {
   try { return JSON.parse(localStorage.getItem(PENDING_INVENTORY_KEY) || '[]'); }
   catch (e) { return []; }
 }
-function setPendingInventoryActions(actions) {
+function setPendingSyncActions(actions) {
   try { localStorage.setItem(PENDING_INVENTORY_KEY, JSON.stringify(actions)); }
   catch (e) { /* ignore */ }
 }
-function hasPendingInventoryActions() {
-  return getPendingInventoryActions().length > 0;
+function hasPendingSyncActions() {
+  return getPendingSyncActions().length > 0;
 }
-function queueInventoryAction(action) {
-  setPendingInventoryActions([...getPendingInventoryActions(), action]);
+function queueSyncAction(action) {
+  setPendingSyncActions([...getPendingSyncActions(), action]);
 }
 
-async function flushPendingInventoryActions() {
-  const actions = getPendingInventoryActions();
+async function flushPendingSyncActions() {
+  const actions = getPendingSyncActions();
   if (actions.length === 0) return;
   const remaining = [];
   for (const action of actions) {
     try {
-      const { error } = action.type === 'adjust-stock'
-        ? await invokeFn('adjust-stock', { body: { token: sessionToken, items: action.items, direction: action.direction } })
-        : await invokeFn('manage-inventory', { body: { token: sessionToken, action: action.type, product: action.product, id: action.id } });
+      let error;
+      if (action.type === 'adjust-stock') {
+        ({ error } = await invokeFn('adjust-stock', { body: { token: sessionToken, items: action.items, direction: action.direction } }));
+      } else if (action.type === 'record-sale') {
+        ({ error } = await invokeFn('record-sale', {
+          body: {
+            token: sessionToken, action: action.saleAction, sale: action.sale, id: action.id,
+            reason: action.reason, voidedBy: action.voidedBy, method: action.method, settledBy: action.settledBy,
+          },
+        }));
+      } else {
+        ({ error } = await invokeFn('manage-inventory', { body: { token: sessionToken, action: action.type, product: action.product, id: action.id } }));
+      }
       // Only a genuine connectivity failure gets requeued. A real
       // rejection (out of stock, expired session, bad fields) will fail
       // the exact same way every time it's retried, so requeuing it would
@@ -229,13 +242,13 @@ async function flushPendingInventoryActions() {
       if (error && error.network) {
         remaining.push(action);
       } else if (error) {
-        console.error('Inventory action rejected, not retrying:', action, error.message);
+        console.error('Sync action rejected, not retrying:', action, error.message);
       }
     } catch (e) {
       remaining.push(action); // still offline — keep it queued
     }
   }
-  setPendingInventoryActions(remaining);
+  setPendingSyncActions(remaining);
 }
 
 // Row <-> product shape mapping for the 'inventory' table (snake_case
@@ -251,9 +264,9 @@ function rowToProduct(r) {
 
 async function getInventoryRows() {
   // Same dirty-first pattern as getOrInit: while there's an unsynced local
-  // change queued (see flushPendingInventoryActions), trust what's on
+  // change queued (see flushPendingSyncActions), trust what's on
   // screen instead of overwriting it with a server read that predates it.
-  if (hasPendingInventoryActions()) {
+  if (hasPendingSyncActions()) {
     const cached = readCache('inventory');
     if (cached !== null) return cached;
   }
@@ -266,6 +279,35 @@ async function getInventoryRows() {
   } catch (e) {
     console.error('inventory read failed, using local cache', e);
     return readCache('inventory') || DEFAULT_INVENTORY;
+  }
+}
+
+// The 'sales' table stores each sale as one jsonb row (see
+// sales-migration.sql) rather than column-by-column, since the sale
+// shape evolves in this file over time. The row's own id/timestamps are
+// metadata; the sale object the rest of the app works with is just data.
+function rowToSale(r) {
+  return r.data;
+}
+
+async function getSalesRows() {
+  // Same dirty-first pattern as getInventoryRows: while there's an
+  // unsynced local sale action queued (see flushPendingSyncActions),
+  // trust what's on screen instead of overwriting it with a server read
+  // that predates it.
+  if (hasPendingSyncActions()) {
+    const cached = readCache('sales');
+    if (cached !== null) return cached;
+  }
+  try {
+    const { data, error } = await supabase.from('sales').select('*').order('created_at', { ascending: true });
+    if (error) throw error;
+    const sales = (data || []).map(rowToSale);
+    writeCache('sales', sales);
+    return sales;
+  } catch (e) {
+    console.error('sales read failed, using local cache', e);
+    return readCache('sales') || [];
   }
 }
 
@@ -2966,14 +3008,14 @@ function App() {
   const pollRef = useRef(null);
   const sessionRestored = useRef(false);
 
-  const refreshPending = () => setPendingCount(getDirtyKeys().length + getPendingInventoryActions().length);
+  const refreshPending = () => setPendingCount(getDirtyKeys().length + getPendingSyncActions().length);
 
   const loadAll = useCallback(async () => {
     await flushDirtyKeys();
-    await flushPendingInventoryActions();
+    await flushPendingSyncActions();
     const [inv, sls, stf, cfg, invLog] = await Promise.all([
       getInventoryRows(),
-      getOrInit('sales', []),
+      getSalesRows(),
       getOrInit('staff', DEFAULT_STAFF),
       getOrInit('settings', DEFAULT_SETTINGS),
       getOrInit('inventoryLog', []),
@@ -2987,14 +3029,17 @@ function App() {
   useEffect(() => {
     loadAll();
 
-    // Instant sync: any device that writes to kv_store or inventory pushes
-    // an update here.
+    // Instant sync: any device that writes to kv_store, inventory, or
+    // sales pushes an update here.
     const channel = supabase
       .channel('kv_store_changes')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'kv_store' }, () => {
         loadAll();
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'inventory' }, () => {
+        loadAll();
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'sales' }, () => {
         loadAll();
       })
       .subscribe();
@@ -3114,10 +3159,10 @@ function App() {
         const { error } = await invokeFn('manage-inventory', {
           body: { token: sessionToken, action: action.type, product: action.product, id: action.id },
         });
-        if (error && error.network) queueInventoryAction(action);
+        if (error && error.network) queueSyncAction(action);
         else if (error) console.error('Inventory edit rejected:', action, error.message);
       } catch (e) {
-        queueInventoryAction(action);
+        queueSyncAction(action);
       }
     }
     refreshPending();
@@ -3146,9 +3191,33 @@ function App() {
     setLastSynced(new Date().toLocaleTimeString());
   };
   const addSale = async (sale) => {
+    // Optimistic UI: reflect the new sale on this device immediately,
+    // regardless of network. The server write below is a plain INSERT of
+    // one new row (see record-sale/index.ts) — two tills checking out at
+    // the same instant each insert their own row, so neither can overwrite
+    // the other's sale the way the old whole-array save-kv write could.
     const next = [...sales, sale];
     setSales(next);
-    await saveShared('sales', next);
+    writeCache('sales', next);
+
+    try {
+      const { error } = await invokeFn('record-sale', { body: { token: sessionToken, action: 'insert', sale } });
+      if (error) {
+        if (error.network) {
+          // Offline — queue it, retried automatically once back online.
+          // The insert is idempotent by sale id, so a retry after a
+          // connection drop (even if the first attempt actually landed)
+          // can't create a duplicate.
+          queueSyncAction({ type: 'record-sale', saleAction: 'insert', sale });
+          refreshPending();
+        } else {
+          console.error('Sale insert rejected (not retried):', error.message);
+        }
+      }
+    } catch (e) {
+      queueSyncAction({ type: 'record-sale', saleAction: 'insert', sale });
+      refreshPending();
+    }
     setLastSynced(new Date().toLocaleTimeString());
   };
   const updateStock = async (items) => {
@@ -3168,7 +3237,7 @@ function App() {
       if (error) {
         if (error.network) {
           // Offline — queue it, retried automatically once back online.
-          queueInventoryAction({ type: 'adjust-stock', items });
+          queueSyncAction({ type: 'adjust-stock', items });
           refreshPending();
         } else {
           // A real rejection — most likely someone else already sold the
@@ -3180,7 +3249,7 @@ function App() {
         }
       }
     } catch (e) {
-      queueInventoryAction({ type: 'adjust-stock', items });
+      queueSyncAction({ type: 'adjust-stock', items });
       refreshPending();
     }
   };
@@ -3192,15 +3261,31 @@ function App() {
     const sale = sales.find((s) => s.id === saleId);
     if (!sale || sale.voided) return false;
 
+    const voidedBy = user?.name || 'Unknown';
     const nextSales = sales.map((s) => (s.id === saleId ? {
       ...s,
       voided: true,
       voidReason: reason || '',
       voidedAt: new Date().toISOString(),
-      voidedBy: user?.name || 'Unknown',
+      voidedBy,
     } : s));
     setSales(nextSales);
-    await saveShared('sales', nextSales);
+    writeCache('sales', nextSales);
+
+    try {
+      // Atomic per-row patch (see patch_sale in sales-migration.sql) —
+      // touches only this sale, so it can't clobber a different sale
+      // another till is writing to at the same time.
+      const { error } = await invokeFn('record-sale', {
+        body: { token: sessionToken, action: 'void', id: saleId, reason, voidedBy },
+      });
+      if (error) {
+        if (error.network) queueSyncAction({ type: 'record-sale', saleAction: 'void', id: saleId, reason, voidedBy });
+        else console.error('Sale void rejected (not retried):', error.message);
+      }
+    } catch (e) {
+      queueSyncAction({ type: 'record-sale', saleAction: 'void', id: saleId, reason, voidedBy });
+    }
 
     const restockItems = sale.items.map((i) => ({ id: i.id, qty: i.qty }));
     const nextInventory = inventory.map((p) => {
@@ -3214,11 +3299,11 @@ function App() {
         body: { token: sessionToken, items: restockItems, direction: 'increment' },
       });
       if (error) {
-        if (error.network) queueInventoryAction({ type: 'adjust-stock', items: restockItems, direction: 'increment' });
+        if (error.network) queueSyncAction({ type: 'adjust-stock', items: restockItems, direction: 'increment' });
         else console.error('Restock on void rejected:', error.message);
       }
     } catch (e) {
-      queueInventoryAction({ type: 'adjust-stock', items: restockItems, direction: 'increment' });
+      queueSyncAction({ type: 'adjust-stock', items: restockItems, direction: 'increment' });
     }
 
     setLastSynced(new Date().toLocaleTimeString());
@@ -3228,15 +3313,28 @@ function App() {
   // Marks a "sale on account" as collected — used once the customer pays
   // off what they owe, recording how and by whom.
   const settleAccountSale = async (saleId, method) => {
+    const settledBy = user?.name || 'Unknown';
     const nextSales = sales.map((s) => (s.id === saleId ? {
       ...s,
       settled: true,
       settledAt: new Date().toISOString(),
-      settledBy: user?.name || 'Unknown',
+      settledBy,
       settledMethod: method || 'cash',
     } : s));
     setSales(nextSales);
-    await saveShared('sales', nextSales);
+    writeCache('sales', nextSales);
+
+    try {
+      const { error } = await invokeFn('record-sale', {
+        body: { token: sessionToken, action: 'settle', id: saleId, method, settledBy },
+      });
+      if (error) {
+        if (error.network) queueSyncAction({ type: 'record-sale', saleAction: 'settle', id: saleId, method, settledBy });
+        else console.error('Sale settle rejected (not retried):', error.message);
+      }
+    } catch (e) {
+      queueSyncAction({ type: 'record-sale', saleAction: 'settle', id: saleId, method, settledBy });
+    }
     setLastSynced(new Date().toLocaleTimeString());
   };
 
