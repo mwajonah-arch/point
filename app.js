@@ -1032,7 +1032,7 @@ function StaffPOS({ inventory, sales, settings, user, addSale, updateStock, last
   useEffect(() => () => { if (flashTimer.current) clearTimeout(flashTimer.current); }, []);
   useEffect(() => () => { if (scanNoticeTimer.current) clearTimeout(scanNoticeTimer.current); }, []);
 
-  const addToCart = (product) => {
+  const addToCart = (product, expired = false) => {
     if (product.stock <= 0) return;
     setCart((c) => {
       const existing = c.find((i) => i.id === product.id);
@@ -1040,7 +1040,17 @@ function StaffPOS({ inventory, sales, settings, user, addSale, updateStock, last
         if (existing.qty >= product.stock) return c;
         return c.map((i) => (i.id === product.id ? { ...i, qty: i.qty + 1 } : i));
       }
-      return [...c, { id: product.id, name: product.name, price: product.price, qty: 1, requiresRx: product.requiresRx, maxStock: product.stock }];
+      return [...c, {
+        id: product.id, name: product.name, price: product.price, qty: 1,
+        requiresRx: product.requiresRx, maxStock: product.stock,
+        // Stamped only when this line was added through the expired-item
+        // confirm dialog (see requestAddToCart/expiredConfirm below), so
+        // it can ride along onto the sale record at checkout — a
+        // compliance-relevant fact ("sold past expiry, cashier confirmed
+        // it") that shouldn't just live in a modal that closes and is
+        // forgotten.
+        ...(expired ? { expiredAtSale: true } : {}),
+      }];
     });
     // Brief visual confirmation that the tap registered — most useful on
     // the mobile drawer layout, where the cart panel isn't on screen.
@@ -1115,7 +1125,9 @@ function StaffPOS({ inventory, sales, settings, user, addSale, updateStock, last
       id: genId('sale'),
       timestamp: new Date().toISOString(),
       cashier: user.name,
-      items: cart.map(({ id, name, price, qty }) => ({ id, name, price, qty })),
+      items: cart.map(({ id, name, price, qty, expiredAtSale }) => ({
+        id, name, price, qty, ...(expiredAtSale ? { expiredAtSale: true } : {}),
+      })),
       subtotal, tax, total,
       paymentMethod: payment.method,
       amountTendered: payment.tendered ?? total,
@@ -1368,7 +1380,7 @@ function StaffPOS({ inventory, sales, settings, user, addSale, updateStock, last
           message={`${expiredConfirm.name} ${expiryLabel(daysUntilExpiry(expiredConfirm.expiry))}. Add it to the cart anyway?`}
           confirmLabel="Add anyway"
           onCancel={() => setExpiredConfirm(null)}
-          onConfirm={() => { addToCart(expiredConfirm); setExpiredConfirm(null); }}
+          onConfirm={() => { addToCart(expiredConfirm, true); setExpiredConfirm(null); }}
         />
       )}
       {scanNotice && (
