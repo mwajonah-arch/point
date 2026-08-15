@@ -977,6 +977,7 @@ function StaffPOS({ inventory, sales, settings, user, addSale, updateStock, last
   const [moreOpen, setMoreOpen] = useState(false);
   const [scanNotice, setScanNotice] = useState('');
   const [flashId, setFlashId] = useState(null);
+  const [expiredConfirm, setExpiredConfirm] = useState(null); // product awaiting an "it's expired, add anyway?" confirmation
   const flashTimer = useRef(null);
   const scanNoticeTimer = useRef(null);
 
@@ -1048,6 +1049,23 @@ function StaffPOS({ inventory, sales, settings, user, addSale, updateStock, last
     flashTimer.current = setTimeout(() => setFlashId(null), 600);
   };
 
+  // Gate in front of addToCart for every entry point (grid tap, frequent
+  // row, barcode scan). Stock is still a hard stop — there's nothing to
+  // sell — but an already-expired item isn't blocked outright, since a
+  // pharmacy may still need to pull and sell through what's on the shelf
+  // under specific circumstances. Instead it stops here for an explicit
+  // confirm, so a cashier can't ring one up by an absent-minded tap the
+  // way a plain stock check would let them.
+  const requestAddToCart = (product) => {
+    if (product.stock <= 0) return;
+    const days = daysUntilExpiry(product.expiry);
+    if (days !== null && days < 0) {
+      setExpiredConfirm(product);
+      return;
+    }
+    addToCart(product);
+  };
+
   // Shared by both scan paths (hardware keyboard-wedge and camera). A hit
   // goes straight into the cart with the same flash confirmation as a tap;
   // a miss drops the code into the search box so staff can find it by eye
@@ -1061,7 +1079,7 @@ function StaffPOS({ inventory, sales, settings, user, addSale, updateStock, last
       if (product.stock <= 0) {
         setScanNotice(`"${product.name}" is out of stock.`);
       } else {
-        addToCart(product);
+        requestAddToCart(product);
         setQuery('');
         setScanNotice('');
       }
@@ -1073,7 +1091,7 @@ function StaffPOS({ inventory, sales, settings, user, addSale, updateStock, last
     scanNoticeTimer.current = setTimeout(() => setScanNotice(''), 4000);
   }, [inventory]);
 
-  const scannerListening = !checkoutOpen && !summaryOpen && !inventoryOpen && !accountsOpen && !drugInfoProduct && !scannerOpen;
+  const scannerListening = !checkoutOpen && !summaryOpen && !inventoryOpen && !accountsOpen && !drugInfoProduct && !scannerOpen && !expiredConfirm;
   useBarcodeScanner(handleBarcodeScan, scannerListening);
 
   const changeQty = (id, delta) => {
@@ -1202,7 +1220,7 @@ function StaffPOS({ inventory, sales, settings, user, addSale, updateStock, last
               <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5, color: 'var(--muted)', marginBottom: 8 }}>Frequently sold</div>
               <div className="pos-scroll" style={{ display: 'flex', gap: 8, overflowX: 'auto', paddingBottom: 4 }}>
                 {frequentProducts.map((p) => (
-                  <button key={p.id} onClick={() => addToCart(p)} style={{
+                  <button key={p.id} onClick={() => requestAddToCart(p)} style={{
                     flex: '0 0 auto', display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 2,
                     padding: '8px 12px', borderRadius: 9, minWidth: 112, textAlign: 'left',
                     border: flashId === p.id ? '1px solid var(--pine)' : '1px solid var(--border)',
@@ -1224,7 +1242,7 @@ function StaffPOS({ inventory, sales, settings, user, addSale, updateStock, last
               const expDays = daysUntilExpiry(p.expiry);
               const expiringSoon = expDays !== null && expDays <= EXPIRY_WINDOW_DAYS;
               return (
-                <div key={p.id} onClick={() => !out && addToCart(p)} role="button" tabIndex={0} style={{
+                <div key={p.id} onClick={() => !out && requestAddToCart(p)} role="button" tabIndex={0} style={{
                   textAlign: 'left', background: 'var(--paper)', border: '1px dashed var(--border)',
                   borderRadius: 10, padding: '14px 14px 12px', position: 'relative',
                   opacity: out ? 0.5 : 1, cursor: out ? 'not-allowed' : 'pointer'
@@ -1344,6 +1362,15 @@ function StaffPOS({ inventory, sales, settings, user, addSale, updateStock, last
       {summaryOpen && <CashierSummaryModal sales={sales} settings={settings} user={user} onClose={() => setSummaryOpen(false)} voidSale={voidSale} />}
       {drugInfoProduct && <DrugInfoModal product={drugInfoProduct} onClose={() => setDrugInfoProduct(null)} />}
       {scannerOpen && <BarcodeScannerModal onDetect={handleBarcodeScan} onClose={() => setScannerOpen(false)} />}
+      {expiredConfirm && (
+        <ConfirmModal
+          title="This item has expired"
+          message={`${expiredConfirm.name} ${expiryLabel(daysUntilExpiry(expiredConfirm.expiry))}. Add it to the cart anyway?`}
+          confirmLabel="Add anyway"
+          onCancel={() => setExpiredConfirm(null)}
+          onConfirm={() => { addToCart(expiredConfirm); setExpiredConfirm(null); }}
+        />
+      )}
       {scanNotice && (
         <div style={{
           position: 'fixed', bottom: 20, left: '50%', transform: 'translateX(-50%)', zIndex: 96,
