@@ -37,6 +37,26 @@ const supabase = createClient(
   configReady ? window.SUPABASE_ANON_KEY : 'placeholder'
 );
 
+// supabase-js's functions.invoke() drops the actual JSON body an edge
+// function sends back whenever the response status isn't 2xx — you get a
+// generic "Edge Function returned a non-2xx status code" instead of e.g.
+// "Incorrect PIN for this login type." This unwraps the real message from
+// the response so the UI can show what the server actually said.
+async function invokeFn(name, options) {
+  const { data, error } = await supabase.functions.invoke(name, options);
+  if (error) {
+    let message = error.message || 'Something went wrong. Please try again.';
+    try {
+      const body = await error.context.json();
+      if (body && body.error) message = body.error;
+    } catch (e) {
+      // Response wasn't JSON (e.g. a network failure) — keep the generic message.
+    }
+    return { data: null, error: { message } };
+  }
+  return { data, error: null };
+}
+
 /* ---------------------------------------------------------------------- */
 /* Seed data                                                               */
 /* ---------------------------------------------------------------------- */
@@ -191,7 +211,7 @@ async function saveShared(key, value) {
     // Writes go through save-kv, not a direct table write — it checks the
     // session token and, for 'staff'/'settings', that the session is an
     // admin's, before touching the database. See save-kv/index.ts.
-    const { data, error } = await supabase.functions.invoke('save-kv', { body: { token: sessionToken, key, value } });
+    const { data, error } = await invokeFn('save-kv', { body: { token: sessionToken, key, value } });
     if (error || !data || data.error) throw (error || new Error((data && data.error) || 'save failed'));
     clearDirty(key);
     return true;
@@ -659,7 +679,7 @@ function LoginScreen({ settings, onLogin, notice }) {
     try {
       // PIN checking happens server-side now — the browser never holds
       // the full staff/PIN list, so there's nothing here to inspect.
-      const { data, error: fnError } = await supabase.functions.invoke('staff-login', { body: { pin, role: tab } });
+      const { data, error: fnError } = await invokeFn('staff-login', { body: { pin, role: tab } });
       if (fnError || !data || data.error || !data.user || !data.token) {
         setError((data && data.error) || (fnError && fnError.message) || 'Incorrect PIN for this login type.');
         setPin('');
@@ -1351,7 +1371,7 @@ function DrugInfoModal({ product, onClose }) {
 
     (async () => {
       try {
-        const { data, error: fnError } = await supabase.functions.invoke('drug-info', { body: { drugName: product.name } });
+        const { data, error: fnError } = await invokeFn('drug-info', { body: { drugName: product.name } });
         if (cancelled) return;
         if (fnError || !data || data.error) {
           setError((data && data.error) || (fnError && fnError.message) || 'Could not fetch drug information.');
@@ -1478,7 +1498,7 @@ function CheckoutModal({ cart, subtotal, tax, total, settings, onClose, onComple
     setMpesaStatus('sending');
     const saleRef = 'POS' + Date.now().toString().slice(-8);
     try {
-      const { data, error } = await supabase.functions.invoke('mpesa-stk-push', {
+      const { data, error } = await invokeFn('mpesa-stk-push', {
         body: { phone: mpesaPhone, amount: total, saleRef },
       });
       if (error || !data || data.error) {
@@ -2647,7 +2667,7 @@ function StaffTab({ staffList, saveStaff }) {
     }
     setBusy(true);
     try {
-      const { data, error } = await supabase.functions.invoke('staff-admin', { body: { adminPin, ...body } });
+      const { data, error } = await invokeFn('staff-admin', { body: { adminPin, ...body } });
       if (error || !data || data.error) {
         setActionError((data && data.error) || (error && error.message) || 'Could not save. Check your admin PIN and try again.');
         return false;
