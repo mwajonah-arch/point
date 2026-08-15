@@ -87,7 +87,7 @@ export async function verifyPin(pin: string, saltHex: string, expectedHashHex: s
 export const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization, apikey',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization, apikey, x-client-info',
 };
 
 export function jsonResponse(body: unknown, status = 200): Response {
