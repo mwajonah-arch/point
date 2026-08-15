@@ -1411,9 +1411,12 @@ function DrugInfoModal({ product, onClose }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [product.name]);
 
-  const Field = ({ label, value }) => (
-    <div style={{ marginBottom: 14 }}>
-      <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, color: 'var(--muted)', marginBottom: 4 }}>{label}</div>
+  const Field = ({ label, value, emphasis }) => (
+    <div style={emphasis ? {
+      marginBottom: 14, padding: '8px 10px', background: 'var(--red-pale)',
+      borderLeft: '3px solid var(--red)', borderRadius: 6,
+    } : { marginBottom: 14 }}>
+      <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, color: emphasis ? 'var(--red)' : 'var(--muted)', marginBottom: 4 }}>{label}</div>
       <div style={{ fontSize: 13, lineHeight: 1.5 }}>{value}</div>
     </div>
   );
@@ -1449,7 +1452,7 @@ function DrugInfoModal({ product, onClose }) {
             <Field label="Drug class" value={info.drugClass} />
             <Field label="Typical dosage" value={info.dosage} />
             <Field label="Common side effects" value={info.sideEffects} />
-            <Field label="Contraindications" value={info.contraindications} />
+            <Field label="Contraindications" value={info.contraindications} emphasis />
             <Field label="Interactions" value={info.interactions} />
             <Field label="Other considerations" value={info.considerations} />
             <div style={{ marginTop: 4, padding: 10, background: 'var(--amber-pale)', borderRadius: 8, fontSize: 11.5, color: '#5C3A12', lineHeight: 1.4 }}>
