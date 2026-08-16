@@ -1695,7 +1695,7 @@ function CheckoutModal({ cart, subtotal, tax, total, settings, onClose, onComple
     const saleRef = 'POS' + Date.now().toString().slice(-8);
     try {
       const { data, error } = await invokeFn('mpesa-stk-push', {
-        body: { phone: mpesaPhone, amount: total, saleRef },
+        body: { token: sessionToken, phone: mpesaPhone, amount: total, saleRef },
       });
       if (error || !data || data.error) {
         setMpesaStatus('failed');
@@ -2203,6 +2203,8 @@ function InventoryTab({ inventory, settings, saveInventory, user, logInventoryCh
   const [sort, setSort] = useState({ key: null, dir: 'asc' });
   const [selectedIds, setSelectedIds] = useState(() => new Set());
   const [bulkModalOpen, setBulkModalOpen] = useState(false);
+  const [saveError, setSaveError] = useState('');
+  const [saving, setSaving] = useState(false);
 
   const filtered = inventory.filter((p) => p.name.toLowerCase().includes(query.toLowerCase()) || p.sku.toLowerCase().includes(query.toLowerCase()));
 
@@ -3193,19 +3195,52 @@ function App() {
     setInventory(next);
     writeCache('inventory', next);
 
+    // A real rejection (bad fields, a SKU collision — see
+    // inventory_sku_unique_idx) isn't retried like a network drop is; it
+    // would fail the exact same way every time. Previously that just went
+    // to console.error and nothing else, leaving the optimistic update
+    // above uncorrected — the admin would see the product as saved right
+    // up until the next reload silently reverted it, with no idea why.
+    // Collected here so the caller (InventoryTab) can show it and undo
+    // the optimistic change for anything that didn't actually save.
+    const rejected = [];
     for (const action of actions) {
       try {
         const { error } = await invokeFn('manage-inventory', {
           body: { token: sessionToken, action: action.type, product: action.product, id: action.id },
         });
         if (error && error.network) queueSyncAction(action);
-        else if (error) console.error('Inventory edit rejected:', action, error.message);
+        else if (error) {
+          console.error('Inventory edit rejected:', action, error.message);
+          rejected.push({ action, message: error.message });
+        }
       } catch (e) {
         queueSyncAction(action);
       }
     }
     refreshPending();
     setLastSynced(new Date().toLocaleTimeString());
+
+    if (rejected.length > 0) {
+      setInventory((current) => {
+        let reverted = current;
+        for (const { action } of rejected) {
+          if (action.type === 'upsert') {
+            const before = prevById.get(action.product.id);
+            reverted = before
+              ? reverted.map((p) => (p.id === action.product.id ? before : p))
+              : reverted.filter((p) => p.id !== action.product.id);
+          } else if (action.type === 'delete') {
+            const before = prevById.get(action.id);
+            if (before && !reverted.some((p) => p.id === action.id)) reverted = [...reverted, before];
+          }
+        }
+        writeCache('inventory', reverted);
+        return reverted;
+      });
+    }
+
+    return { ok: rejected.length === 0, errors: rejected.map((r) => r.message) };
   };
   const logInventoryChange = async ({ action, productName, sku, detail }) => {
     const entry = {
