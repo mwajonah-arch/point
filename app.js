@@ -1682,6 +1682,26 @@ function CheckoutModal({ cart, subtotal, tax, total, settings, onClose, onComple
           return;
         }
       } catch (e) { /* keep polling */ }
+      // Safaricom's async callback is reliable for a successful payment,
+      // but frequently never arrives at all when the customer cancels or
+      // enters the wrong PIN — which otherwise left this stuck on "still
+      // waiting" forever. Every ~6s, actively ask Safaricom directly as a
+      // fallback. It only ever resolves the failure side (see
+      // mpesa-stk-query) — a real success still gets its receipt from the
+      // callback on the next DB poll above, so this never races it.
+      if (attempts % 3 === 0) {
+        try {
+          const { data: queryData } = await invokeFn('mpesa-stk-query', {
+            body: { token: sessionToken, checkoutRequestId },
+          });
+          if (queryData && queryData.status === 'failed') {
+            clearInterval(pollTimer.current);
+            setMpesaError(queryData.resultDesc || 'The customer did not complete the payment.');
+            setMpesaStatus('failed');
+            return;
+          }
+        } catch (e) { /* keep polling */ }
+      }
       if (attempts >= 30) { // ~60 seconds
         clearInterval(pollTimer.current);
         setMpesaStatus((s) => (s === 'waiting' ? 'timeout' : s));
