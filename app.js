@@ -229,6 +229,7 @@ async function flushPendingSyncActions() {
           body: {
             token: sessionToken, action: action.saleAction, sale: action.sale, id: action.id,
             reason: action.reason, voidedBy: action.voidedBy, method: action.method, settledBy: action.settledBy,
+            mpesaReceipt: action.mpesaReceipt,
           },
         }));
       } else {
@@ -1881,6 +1882,141 @@ function CheckoutModal({ cart, subtotal, tax, total, settings, onClose, onComple
   );
 }
 
+// Prompts a customer to pay off their "on account" balance via M-Pesa —
+// same STK push + poll flow as the checkout M-Pesa option, so settling
+// an account feels exactly like ringing up a fresh M-Pesa sale.
+function AccountMpesaModal({ customer, settings, onClose, onSettled }) {
+  const [phone, setPhone] = useState(customer.phone || '');
+  const [status, setStatus] = useState('idle'); // idle | sending | waiting | success | failed | timeout
+  const [error, setError] = useState('');
+  const [receipt, setReceipt] = useState(null);
+  const pollTimer = useRef(null);
+
+  useEffect(() => () => { if (pollTimer.current) clearInterval(pollTimer.current); }, []);
+
+  useEffect(() => {
+    if (status === 'success') onSettled(receipt);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status]);
+
+  const watchMpesaStatus = (checkoutRequestId) => {
+    let attempts = 0;
+    pollTimer.current = setInterval(async () => {
+      attempts += 1;
+      try {
+        const { data } = await supabase.from('mpesa_transactions')
+          .select('status, mpesa_receipt, result_desc')
+          .eq('checkout_request_id', checkoutRequestId)
+          .maybeSingle();
+        if (data && data.status !== 'pending') {
+          clearInterval(pollTimer.current);
+          if (data.status === 'success') {
+            setReceipt(data.mpesa_receipt);
+            setStatus('success');
+          } else {
+            setError(data.result_desc || 'The customer did not complete the payment.');
+            setStatus('failed');
+          }
+          return;
+        }
+      } catch (e) { /* keep polling */ }
+      if (attempts % 3 === 0) {
+        try {
+          const { data: queryData } = await invokeFn('mpesa-stk-query', {
+            body: { token: sessionToken, checkoutRequestId },
+          });
+          if (queryData && queryData.status === 'failed') {
+            clearInterval(pollTimer.current);
+            setError(queryData.resultDesc || 'The customer did not complete the payment.');
+            setStatus('failed');
+            return;
+          }
+        } catch (e) { /* keep polling */ }
+      }
+      if (attempts >= 30) { // ~60 seconds
+        clearInterval(pollTimer.current);
+        setStatus((s) => (s === 'waiting' ? 'timeout' : s));
+      }
+    }, 2000);
+  };
+
+  const sendMpesaRequest = async () => {
+    setError('');
+    setStatus('sending');
+    const saleRef = 'ACC' + Date.now().toString().slice(-8);
+    try {
+      const { data, error: err } = await invokeFn('mpesa-stk-push', {
+        body: { token: sessionToken, phone, amount: customer.total, saleRef },
+      });
+      if (err || !data || data.error) {
+        setStatus('failed');
+        setError((data && data.error) || (err && err.message) || 'Could not send the payment request.');
+        return;
+      }
+      setStatus('waiting');
+      watchMpesaStatus(data.checkoutRequestId);
+    } catch (e) {
+      setStatus('failed');
+      setError('Could not reach the payment service. Check your connection and try again.');
+    }
+  };
+
+  return (
+    <div className="pos-modal-backdrop">
+      <div className="pos-modal" style={{ background: '#fff', borderRadius: 14, padding: 24, maxWidth: 380, width: '90%' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 4 }}>
+          <h3 className="pos-serif" style={{ fontSize: 17, fontWeight: 700 }}>Collect via M-Pesa</h3>
+          {status !== 'sending' && status !== 'waiting' && (
+            <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--muted)' }}><X size={18} /></button>
+          )}
+        </div>
+        <p style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 16 }}>
+          {customer.name} · {formatMoney(customer.total, settings.currency)} outstanding
+        </p>
+
+        {(status === 'idle' || status === 'sending' || status === 'failed') && (
+          <>
+            <label style={{ fontSize: 12, color: 'var(--muted)' }}>Customer's M-Pesa number</label>
+            <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="07XX XXX XXX" inputMode="tel"
+              style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 15, marginTop: 4 }} />
+            {error && <p style={{ color: 'var(--red)', fontSize: 12, marginTop: 8 }}>{error}</p>}
+            <button type="button" onClick={sendMpesaRequest} disabled={!phone || status === 'sending'}
+              style={{
+                marginTop: 14, width: '100%', padding: '11px 0', borderRadius: 8,
+                border: 'none', background: 'var(--pine)', color: '#fff', fontWeight: 600, fontSize: 14,
+                opacity: (!phone || status === 'sending') ? 0.6 : 1
+              }}>
+              {status === 'sending' ? 'Sending request…' : error ? 'Try again' : 'Send payment prompt'}
+            </button>
+          </>
+        )}
+
+        {(status === 'waiting' || status === 'timeout') && (
+          <div style={{ textAlign: 'center', padding: '14px 0' }}>
+            <div style={{ width: 34, height: 34, margin: '0 auto 10px', border: '3px solid var(--pine-pale)', borderTopColor: 'var(--pine)', borderRadius: '50%', animation: 'pos-spin 0.8s linear infinite' }} />
+            <p style={{ fontSize: 13, marginBottom: 4 }}>
+              {status === 'timeout' ? 'Still waiting — ask the customer to check their phone.' : `A prompt was sent to ${phone}.`}
+            </p>
+            <p style={{ fontSize: 12, color: 'var(--muted)' }}>Ask them to enter their M-Pesa PIN to complete the payment.</p>
+            {status === 'timeout' && (
+              <button type="button" onClick={sendMpesaRequest} style={{ marginTop: 10, padding: '8px 14px', borderRadius: 8, border: '1px solid var(--pine)', background: '#fff', color: 'var(--pine)', fontSize: 13 }}>
+                Resend request
+              </button>
+            )}
+          </div>
+        )}
+
+        {status === 'success' && (
+          <div style={{ textAlign: 'center', padding: '10px 0', color: 'var(--pine)' }}>
+            <CheckCircle size={24} style={{ marginBottom: 6 }} />
+            <p style={{ fontSize: 13, fontWeight: 600 }}>Payment received{receipt ? ` — ${receipt}` : ''}</p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function ReceiptModal({ sale, settings, onClose }) {
   return (
     <div className="pos-modal-backdrop">
@@ -2748,6 +2884,7 @@ function AccountsTab({ sales, settings, settleAccountSale }) {
   const [settleMethod, setSettleMethod] = useState({});
   const [busyId, setBusyId] = useState(null);
   const [query, setQuery] = useState('');
+  const [mpesaPrompt, setMpesaPrompt] = useState(null); // { sale, name, phone }
 
   const accountSales = sales.filter((s) => s.paymentMethod === 'account' && !s.voided);
   const outstanding = accountSales.filter((s) => !s.settled).sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
@@ -2764,11 +2901,26 @@ function AccountsTab({ sales, settings, settleAccountSale }) {
   const customers = allCustomers.filter((c) => c.name.toLowerCase().includes(query.toLowerCase()));
   const totalOutstanding = outstanding.reduce((sum, s) => sum + s.total, 0);
 
-  const markPaid = async (id) => {
+  const markPaid = async (sale, customer) => {
     if (!settleAccountSale) return;
-    setBusyId(id);
-    await settleAccountSale(id, settleMethod[id] || 'cash');
+    const method = settleMethod[sale.id] || 'cash';
+    // M-Pesa needs the customer to actually confirm on their phone —
+    // send them a real STK push instead of just flipping the sale to paid.
+    if (method === 'mpesa') {
+      setMpesaPrompt({ sale, name: customer.name, phone: customer.phone });
+      return;
+    }
+    setBusyId(sale.id);
+    await settleAccountSale(sale.id, method);
     setBusyId(null);
+  };
+
+  const handleMpesaSettled = async (receipt) => {
+    if (!mpesaPrompt) return;
+    setBusyId(mpesaPrompt.sale.id);
+    await settleAccountSale(mpesaPrompt.sale.id, 'mpesa', receipt);
+    setBusyId(null);
+    setMpesaPrompt(null);
   };
 
   return (
@@ -2833,8 +2985,8 @@ function AccountsTab({ sales, settings, settleAccountSale }) {
                       <option value="card">Card</option>
                       <option value="mpesa">M-Pesa</option>
                     </select>
-                    <button disabled={busyId === s.id} onClick={() => markPaid(s.id)} style={{ background: 'var(--pine)', color: '#fff', border: 'none', borderRadius: 6, padding: '5px 10px', fontSize: 11, fontWeight: 600, opacity: busyId === s.id ? 0.6 : 1 }}>
-                      {busyId === s.id ? 'Saving…' : 'Mark as paid'}
+                    <button disabled={busyId === s.id} onClick={() => markPaid(s, c)} style={{ background: 'var(--pine)', color: '#fff', border: 'none', borderRadius: 6, padding: '5px 10px', fontSize: 11, fontWeight: 600, opacity: busyId === s.id ? 0.6 : 1 }}>
+                      {busyId === s.id ? 'Saving…' : (settleMethod[s.id] || 'cash') === 'mpesa' ? 'Prompt for M-Pesa' : 'Mark as paid'}
                     </button>
                   </>
                 )}
@@ -2857,6 +3009,15 @@ function AccountsTab({ sales, settings, settleAccountSale }) {
             ))}
           </div>
         </>
+      )}
+
+      {mpesaPrompt && (
+        <AccountMpesaModal
+          customer={{ name: mpesaPrompt.name, phone: mpesaPrompt.phone, total: mpesaPrompt.sale.total }}
+          settings={settings}
+          onClose={() => setMpesaPrompt(null)}
+          onSettled={handleMpesaSettled}
+        />
       )}
     </div>
   );
@@ -3405,8 +3566,10 @@ function App() {
   };
 
   // Marks a "sale on account" as collected — used once the customer pays
-  // off what they owe, recording how and by whom.
-  const settleAccountSale = async (saleId, method) => {
+  // off what they owe, recording how and by whom. mpesaReceipt is only
+  // set when the balance was collected via a live STK push prompt (see
+  // AccountMpesaModal) rather than just picked from the method dropdown.
+  const settleAccountSale = async (saleId, method, mpesaReceipt) => {
     const settledBy = user?.name || 'Unknown';
     const nextSales = sales.map((s) => (s.id === saleId ? {
       ...s,
@@ -3414,20 +3577,21 @@ function App() {
       settledAt: new Date().toISOString(),
       settledBy,
       settledMethod: method || 'cash',
+      ...(mpesaReceipt ? { mpesaReceipt } : {}),
     } : s));
     setSales(nextSales);
     writeCache('sales', nextSales);
 
     try {
       const { error } = await invokeFn('record-sale', {
-        body: { token: sessionToken, action: 'settle', id: saleId, method, settledBy },
+        body: { token: sessionToken, action: 'settle', id: saleId, method, settledBy, mpesaReceipt },
       });
       if (error) {
-        if (error.network) queueSyncAction({ type: 'record-sale', saleAction: 'settle', id: saleId, method, settledBy });
+        if (error.network) queueSyncAction({ type: 'record-sale', saleAction: 'settle', id: saleId, method, settledBy, mpesaReceipt });
         else console.error('Sale settle rejected (not retried):', error.message);
       }
     } catch (e) {
-      queueSyncAction({ type: 'record-sale', saleAction: 'settle', id: saleId, method, settledBy });
+      queueSyncAction({ type: 'record-sale', saleAction: 'settle', id: saleId, method, settledBy, mpesaReceipt });
     }
     setLastSynced(new Date().toLocaleTimeString());
   };
@@ -3492,3 +3656,4 @@ function ConfigMissing() {
 
 const root = ReactDOM.createRoot(document.getElementById('root'));
 root.render(configReady ? <App /> : <ConfigMissing />);
+    
