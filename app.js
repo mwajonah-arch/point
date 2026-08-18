@@ -3049,7 +3049,7 @@ function AccountsTab({ sales, settings, settleAccountSale }) {
           <div style={{ background: 'var(--paper)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
             {settledRecently.map((s) => (
               <div key={s.id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12.5, padding: '10px 16px', borderBottom: '1px solid var(--border)', color: 'var(--muted)' }}>
-                <span>{s.customerName} · settled {s.settledAt ? new Date(s.settledAt).toLocaleDateString() : '—'}{s.settledMethod ? ` via ${s.settledMethod}` : ''}</span>
+                <span>{s.customerName} · settled {s.settledAt ? new Date(s.settledAt).toLocaleDateString() : '—'}{s.settledMethod ? ` via ${s.settledMethod}` : ''}{s.mpesaReceipt ? ` (${s.mpesaReceipt})` : ''}</span>
                 <span className="pos-mono">{formatMoney(s.total, settings.currency)}</span>
               </div>
             ))}
