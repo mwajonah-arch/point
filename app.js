@@ -1891,6 +1891,18 @@ function AccountMpesaModal({ customer, settings, onClose, onSettled }) {
   const [error, setError] = useState('');
   const [receipt, setReceipt] = useState(null);
   const pollTimer = useRef(null);
+  // Covers a customer who already sent the money straight to the paybill/
+  // till on their own, outside any prompt this app sent — there's no STK
+  // callback to reconcile that against, so staff confirm it by hand.
+  const [manualMode, setManualMode] = useState(false);
+  const [manualReceipt, setManualReceipt] = useState('');
+  const [manualBusy, setManualBusy] = useState(false);
+
+  const confirmManual = async () => {
+    setManualBusy(true);
+    await onSettled(manualReceipt.trim() || null);
+    setManualBusy(false);
+  };
 
   useEffect(() => () => { if (pollTimer.current) clearInterval(pollTimer.current); }, []);
 
@@ -1966,7 +1978,7 @@ function AccountMpesaModal({ customer, settings, onClose, onSettled }) {
       <div className="pos-modal" style={{ background: '#fff', borderRadius: 14, padding: 24, maxWidth: 380, width: '90%' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 4 }}>
           <h3 className="pos-serif" style={{ fontSize: 17, fontWeight: 700 }}>Collect via M-Pesa</h3>
-          {status !== 'sending' && status !== 'waiting' && (
+          {status !== 'sending' && status !== 'waiting' && !manualBusy && (
             <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--muted)' }}><X size={18} /></button>
           )}
         </div>
@@ -1974,36 +1986,70 @@ function AccountMpesaModal({ customer, settings, onClose, onSettled }) {
           {customer.name} · {formatMoney(customer.total, settings.currency)} outstanding
         </p>
 
-        {(status === 'idle' || status === 'sending' || status === 'failed') && (
+        {manualMode ? (
           <>
-            <label style={{ fontSize: 12, color: 'var(--muted)' }}>Customer's M-Pesa number</label>
-            <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="07XX XXX XXX" inputMode="tel"
+            <p style={{ fontSize: 12.5, color: 'var(--muted)', marginBottom: 10 }}>
+              Use this if the customer already sent the money straight to your till or paybill on their own — no prompt needed.
+            </p>
+            <label style={{ fontSize: 12, color: 'var(--muted)' }}>M-Pesa receipt code (optional)</label>
+            <input value={manualReceipt} onChange={(e) => setManualReceipt(e.target.value)} placeholder="e.g. QFG7H8J2KL" autoCapitalize="characters"
               style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 15, marginTop: 4 }} />
-            {error && <p style={{ color: 'var(--red)', fontSize: 12, marginTop: 8 }}>{error}</p>}
-            <button type="button" onClick={sendMpesaRequest} disabled={!phone || status === 'sending'}
+            <button type="button" onClick={confirmManual} disabled={manualBusy}
               style={{
                 marginTop: 14, width: '100%', padding: '11px 0', borderRadius: 8,
                 border: 'none', background: 'var(--pine)', color: '#fff', fontWeight: 600, fontSize: 14,
-                opacity: (!phone || status === 'sending') ? 0.6 : 1
+                opacity: manualBusy ? 0.6 : 1
               }}>
-              {status === 'sending' ? 'Sending request…' : error ? 'Try again' : 'Send payment prompt'}
+              {manualBusy ? 'Saving…' : 'Mark as settled'}
+            </button>
+            <button type="button" onClick={() => setManualMode(false)} disabled={manualBusy}
+              style={{ marginTop: 10, width: '100%', padding: '8px 0', borderRadius: 8, border: 'none', background: 'none', color: 'var(--muted)', fontSize: 12.5 }}>
+              ← Back to sending a prompt
             </button>
           </>
-        )}
+        ) : (
+          <>
+            {(status === 'idle' || status === 'sending' || status === 'failed') && (
+              <>
+                <label style={{ fontSize: 12, color: 'var(--muted)' }}>Customer's M-Pesa number</label>
+                <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="07XX XXX XXX" inputMode="tel"
+                  style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 15, marginTop: 4 }} />
+                {error && <p style={{ color: 'var(--red)', fontSize: 12, marginTop: 8 }}>{error}</p>}
+                <button type="button" onClick={sendMpesaRequest} disabled={!phone || status === 'sending'}
+                  style={{
+                    marginTop: 14, width: '100%', padding: '11px 0', borderRadius: 8,
+                    border: 'none', background: 'var(--pine)', color: '#fff', fontWeight: 600, fontSize: 14,
+                    opacity: (!phone || status === 'sending') ? 0.6 : 1
+                  }}>
+                  {status === 'sending' ? 'Sending request…' : error ? 'Try again' : 'Send payment prompt'}
+                </button>
+              </>
+            )}
 
-        {(status === 'waiting' || status === 'timeout') && (
-          <div style={{ textAlign: 'center', padding: '14px 0' }}>
-            <div style={{ width: 34, height: 34, margin: '0 auto 10px', border: '3px solid var(--pine-pale)', borderTopColor: 'var(--pine)', borderRadius: '50%', animation: 'pos-spin 0.8s linear infinite' }} />
-            <p style={{ fontSize: 13, marginBottom: 4 }}>
-              {status === 'timeout' ? 'Still waiting — ask the customer to check their phone.' : `A prompt was sent to ${phone}.`}
-            </p>
-            <p style={{ fontSize: 12, color: 'var(--muted)' }}>Ask them to enter their M-Pesa PIN to complete the payment.</p>
-            {status === 'timeout' && (
-              <button type="button" onClick={sendMpesaRequest} style={{ marginTop: 10, padding: '8px 14px', borderRadius: 8, border: '1px solid var(--pine)', background: '#fff', color: 'var(--pine)', fontSize: 13 }}>
-                Resend request
+            {(status === 'waiting' || status === 'timeout') && (
+              <div style={{ textAlign: 'center', padding: '14px 0' }}>
+                <div style={{ width: 34, height: 34, margin: '0 auto 10px', border: '3px solid var(--pine-pale)', borderTopColor: 'var(--pine)', borderRadius: '50%', animation: 'pos-spin 0.8s linear infinite' }} />
+                <p style={{ fontSize: 13, marginBottom: 4 }}>
+                  {status === 'timeout' ? 'Still waiting — ask the customer to check their phone.' : `A prompt was sent to ${phone}.`}
+                </p>
+                <p style={{ fontSize: 12, color: 'var(--muted)' }}>Ask them to enter their M-Pesa PIN to complete the payment.</p>
+                {status === 'timeout' && (
+                  <button type="button" onClick={sendMpesaRequest} style={{ marginTop: 10, padding: '8px 14px', borderRadius: 8, border: '1px solid var(--pine)', background: '#fff', color: 'var(--pine)', fontSize: 13 }}>
+                    Resend request
+                  </button>
+                )}
+              </div>
+            )}
+
+            {status !== 'sending' && status !== 'success' && (
+              <button type="button" onClick={() => setManualMode(true)} style={{
+                marginTop: 14, width: '100%', padding: '8px 0', borderRadius: 8, border: 'none',
+                background: 'none', color: 'var(--muted)', fontSize: 12.5, textDecoration: 'underline'
+              }}>
+                Customer already paid another way
               </button>
             )}
-          </div>
+          </>
         )}
 
         {status === 'success' && (
@@ -3656,4 +3702,3 @@ function ConfigMissing() {
 
 const root = ReactDOM.createRoot(document.getElementById('root'));
 root.render(configReady ? <App /> : <ConfigMissing />);
-  
