@@ -1661,6 +1661,24 @@ function DrugInfoModal({ product, onClose }) {
   );
 }
 
+// Paystack's card popup script. index.html normally loads it, but if that page
+// is out of date or the script was blocked/slow, load it here on demand so the
+// till doesn't depend on it. Resolves true once window.PaystackPop exists.
+let paystackPopupPromise = null;
+function loadPaystackPopup() {
+  if (window.PaystackPop) return Promise.resolve(true);
+  if (!paystackPopupPromise) {
+    paystackPopupPromise = new Promise((resolve) => {
+      const el = document.createElement('script');
+      el.src = 'https://js.paystack.co/v2/inline.js';
+      el.onload = () => resolve(!!window.PaystackPop);
+      el.onerror = () => resolve(false);
+      document.head.appendChild(el);
+    }).then((ok) => { if (!ok) paystackPopupPromise = null; return ok; }); // allow a retry
+  }
+  return paystackPopupPromise;
+}
+
 // Card payments through Paystack. The card number is typed into Paystack's
 // own secure form (a popup opened with an access_code the server created),
 // never into this app. The sale only completes once the server confirms the
@@ -1727,9 +1745,10 @@ function usePaystackCard({ amount, refPrefix, onPaid }) {
     }, 2000);
   };
 
-  const openForm = () => {
-    if (!window.PaystackPop) {
-      setError('The card form could not load. Check the internet connection and try again.');
+  const openForm = async () => {
+    const ready = await loadPaystackPopup();
+    if (!ready) {
+      setError('Could not load Paystack\'s card form (js.paystack.co). Check the internet connection, and that no ad-blocker or network filter is blocking it, then try again.');
       setStatus('failed');
       return;
     }
@@ -1748,6 +1767,7 @@ function usePaystackCard({ amount, refPrefix, onPaid }) {
     setError('');
     setStatus('starting');
     paidRef.current = false;
+    loadPaystackPopup(); // warm up while the server creates the payment
     const saleRef = refPrefix + Date.now().toString().slice(-8);
     try {
       const { data, error: err } = await invokeFn('paystack-card-init', {
@@ -3970,4 +3990,3 @@ function ConfigMissing() {
 
 const root = ReactDOM.createRoot(document.getElementById('root'));
 root.render(configReady ? <App /> : <ConfigMissing />);
-
