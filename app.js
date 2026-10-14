@@ -66,6 +66,13 @@ async function invokeFn(name, options) {
   return { data, error: null };
 }
 
+// Which backend collects M-Pesa payments. "paystack" (default) uses the
+// paystack-* edge functions; set window.PAYMENT_PROVIDER = "daraja" in
+// config.js to go back to the direct Safaricom functions.
+const PAYMENT_PROVIDER = window.PAYMENT_PROVIDER || 'paystack';
+const MPESA_PUSH_FN = PAYMENT_PROVIDER === 'paystack' ? 'paystack-charge' : 'mpesa-stk-push';
+const MPESA_QUERY_FN = PAYMENT_PROVIDER === 'paystack' ? 'paystack-verify' : 'mpesa-stk-query';
+
 /* ---------------------------------------------------------------------- */
 /* Seed data                                                               */
 /* ---------------------------------------------------------------------- */
@@ -1709,9 +1716,15 @@ function CheckoutModal({ cart, subtotal, tax, total, settings, onClose, onComple
       // callback on the next DB poll above, so this never races it.
       if (attempts % 3 === 0) {
         try {
-          const { data: queryData } = await invokeFn('mpesa-stk-query', {
+          const { data: queryData } = await invokeFn(MPESA_QUERY_FN, {
             body: { token: sessionToken, checkoutRequestId },
           });
+          if (queryData && queryData.status === 'success' && PAYMENT_PROVIDER === 'paystack') {
+            clearInterval(pollTimer.current);
+            setMpesaReceipt(queryData.receipt || null);
+            setMpesaStatus('success');
+            return;
+          }
           if (queryData && queryData.status === 'failed') {
             clearInterval(pollTimer.current);
             setMpesaError(queryData.resultDesc || 'The customer did not complete the payment.');
@@ -1732,7 +1745,7 @@ function CheckoutModal({ cart, subtotal, tax, total, settings, onClose, onComple
     setMpesaStatus('sending');
     const saleRef = 'POS' + Date.now().toString().slice(-8);
     try {
-      const { data, error } = await invokeFn('mpesa-stk-push', {
+      const { data, error } = await invokeFn(MPESA_PUSH_FN, {
         body: { token: sessionToken, phone: mpesaPhone, amount: total, saleRef },
       });
       if (error || !data || data.error) {
@@ -1951,9 +1964,15 @@ function AccountMpesaModal({ customer, settings, onClose, onSettled }) {
       } catch (e) { /* keep polling */ }
       if (attempts % 3 === 0) {
         try {
-          const { data: queryData } = await invokeFn('mpesa-stk-query', {
+          const { data: queryData } = await invokeFn(MPESA_QUERY_FN, {
             body: { token: sessionToken, checkoutRequestId },
           });
+          if (queryData && queryData.status === 'success' && PAYMENT_PROVIDER === 'paystack') {
+            clearInterval(pollTimer.current);
+            setReceipt(queryData.receipt || null);
+            setStatus('success');
+            return;
+          }
           if (queryData && queryData.status === 'failed') {
             clearInterval(pollTimer.current);
             setError(queryData.resultDesc || 'The customer did not complete the payment.');
@@ -1974,7 +1993,7 @@ function AccountMpesaModal({ customer, settings, onClose, onSettled }) {
     setStatus('sending');
     const saleRef = 'ACC' + Date.now().toString().slice(-8);
     try {
-      const { data, error: err } = await invokeFn('mpesa-stk-push', {
+      const { data, error: err } = await invokeFn(MPESA_PUSH_FN, {
         body: { token: sessionToken, phone, amount: customer.total, saleRef },
       });
       if (err || !data || data.error) {
