@@ -10,3 +10,7 @@
 
 window.SUPABASE_URL = "https://jaduzltaqhplkbosursy.supabase.co";
 window.SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImphZHV6bHRhcWhwbGtib3N1cnN5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODU2NzM0NTYsImV4cCI6MjEwMTI0OTQ1Nn0.ix63X0IpemVcO4UJ7uvb62Dxh6pMhvo-NiAf3nyMqn0";
+
+// How M-Pesa payments are collected: "paystack" (see PAYSTACK-SETUP.md) or
+// "daraja" (direct Safaricom, see MPESA-SETUP.md).
+window.PAYMENT_PROVIDER = "paystack";
