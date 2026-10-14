@@ -253,7 +253,7 @@ async function flushPendingSyncActions() {
           body: {
             token: sessionToken, action: action.saleAction, sale: action.sale, id: action.id,
             reason: action.reason, voidedBy: action.voidedBy, method: action.method, settledBy: action.settledBy,
-            mpesaReceipt: action.mpesaReceipt,
+            mpesaReceipt: action.mpesaReceipt, paymentRef: action.paymentRef,
           },
         }));
       } else {
@@ -1158,6 +1158,7 @@ function StaffPOS({ inventory, sales, settings, user, addSale, updateStock, last
       amountTendered: payment.tendered ?? total,
       change: payment.change ?? 0,
       mpesaReceipt: payment.mpesaReceipt || null,
+      paymentRef: payment.paymentRef || null,
       customerName: payment.customerName || null,
       customerPhone: payment.customerPhone || null,
       settled: payment.method !== 'account',
@@ -1660,6 +1661,166 @@ function DrugInfoModal({ product, onClose }) {
   );
 }
 
+// Card payments through Paystack. The card number is typed into Paystack's
+// own secure form (a popup opened with an access_code the server created),
+// never into this app. The sale only completes once the server confirms the
+// payment — either via Paystack's webhook (seen through the DB poll) or by
+// asking Paystack directly (paystack-verify).
+function usePaystackCard({ amount, refPrefix, onPaid }) {
+  const [status, setStatus] = useState('idle'); // idle | starting | waiting | success | failed
+  const [error, setError] = useState('');
+  const [paymentRef, setPaymentRef] = useState(null);
+  const pollTimer = useRef(null);
+  const accessCode = useRef(null);
+  const reference = useRef(null);
+  const paidRef = useRef(false);
+  const onPaidRef = useRef(onPaid);
+  onPaidRef.current = onPaid;
+
+  const stopPolling = () => { if (pollTimer.current) { clearInterval(pollTimer.current); pollTimer.current = null; } };
+  useEffect(() => stopPolling, []);
+
+  const markPaid = (ref) => {
+    stopPolling();
+    if (paidRef.current) return; // never complete the same payment twice
+    paidRef.current = true;
+    setPaymentRef(ref);
+    setStatus('success');
+    onPaidRef.current(ref);
+  };
+
+  const checkOnce = async (askPaystack) => {
+    const checkoutRequestId = reference.current;
+    if (!checkoutRequestId) return;
+    try {
+      const { data } = await supabase.from('mpesa_transactions')
+        .select('status, mpesa_receipt, result_desc')
+        .eq('checkout_request_id', checkoutRequestId)
+        .maybeSingle();
+      if (data && data.status === 'success') { markPaid(data.mpesa_receipt || checkoutRequestId); return; }
+      if (data && data.status === 'failed') {
+        stopPolling();
+        setError(data.result_desc || 'The card payment did not go through.');
+        setStatus('failed');
+        return;
+      }
+    } catch (e) { /* keep polling */ }
+    if (askPaystack) {
+      try {
+        const { data: q } = await invokeFn('paystack-verify', { body: { token: sessionToken, checkoutRequestId } });
+        if (q && q.status === 'success') { markPaid(q.receipt || checkoutRequestId); return; }
+        if (q && q.status === 'failed') {
+          stopPolling();
+          setError(q.resultDesc || 'The card payment did not go through.');
+          setStatus('failed');
+        }
+      } catch (e) { /* keep polling */ }
+    }
+  };
+
+  const startPolling = () => {
+    stopPolling();
+    let attempts = 0;
+    pollTimer.current = setInterval(() => {
+      attempts += 1;
+      checkOnce(attempts % 3 === 0); // every ~6s also ask Paystack directly
+    }, 2000);
+  };
+
+  const openForm = () => {
+    if (!window.PaystackPop) {
+      setError('The card form could not load. Check the internet connection and try again.');
+      setStatus('failed');
+      return;
+    }
+    new window.PaystackPop().resumeTransaction(accessCode.current, {
+      // The customer finished in the form — confirm with the server straight away.
+      onSuccess: () => { checkOnce(true); },
+      onCancel: () => { /* form closed; stay on "waiting" so the cashier can reopen or cancel */ },
+      onError: (err) => {
+        setError((err && err.message) || 'The card form reported an error.');
+        setStatus('failed');
+      },
+    });
+  };
+
+  const start = async () => {
+    setError('');
+    setStatus('starting');
+    paidRef.current = false;
+    const saleRef = refPrefix + Date.now().toString().slice(-8);
+    try {
+      const { data, error: err } = await invokeFn('paystack-card-init', {
+        body: { token: sessionToken, amount, saleRef },
+      });
+      if (err || !data || data.error) {
+        setStatus('failed');
+        setError((data && data.error) || (err && err.message) || 'Could not start the card payment.');
+        return;
+      }
+      accessCode.current = data.accessCode;
+      reference.current = data.checkoutRequestId;
+      setStatus('waiting');
+      startPolling();
+      openForm();
+    } catch (e) {
+      setStatus('failed');
+      setError('Could not reach the payment service. Check your connection and try again.');
+    }
+  };
+
+  // Abandon this attempt. (A fresh "Pay by card" creates a new transaction.)
+  const cancel = () => {
+    stopPolling();
+    accessCode.current = null;
+    reference.current = null;
+    setError('');
+    setStatus('idle');
+  };
+
+  return { status, error, paymentRef, start, openForm, cancel, checkNow: () => checkOnce(true) };
+}
+
+// The card section shown under the "Card" tab (checkout) and in the account
+// settle modal. Pure presentation over the usePaystackCard state.
+function CardPaymentPanel({ card, disabled }) {
+  const btn = { width: '100%', padding: '11px 0', borderRadius: 8, border: '1px solid var(--pine)', background: '#fff', color: 'var(--pine)', fontWeight: 600, fontSize: 14 };
+  return (
+    <div style={{ marginBottom: 16 }}>
+      {(card.status === 'idle' || card.status === 'starting' || card.status === 'failed') && (
+        <>
+          <p style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 8 }}>
+            Opens Paystack's secure card form. The customer enters their card there — card details never touch this till.
+          </p>
+          {card.error && <p style={{ color: 'var(--red)', fontSize: 12, marginBottom: 8 }}>{card.error}</p>}
+          <button type="button" onClick={card.start} disabled={disabled || card.status === 'starting'}
+            style={{ ...btn, opacity: (disabled || card.status === 'starting') ? 0.5 : 1 }}>
+            {card.status === 'starting' ? 'Starting…' : card.error ? 'Try again' : 'Pay by card'}
+          </button>
+        </>
+      )}
+      {card.status === 'waiting' && (
+        <div style={{ textAlign: 'center', padding: '14px 0' }}>
+          <div style={{ width: 34, height: 34, margin: '0 auto 10px', border: '3px solid var(--pine-pale)', borderTopColor: 'var(--pine)', borderRadius: '50%', animation: 'pos-spin 0.8s linear infinite' }} />
+          <p style={{ fontSize: 13, marginBottom: 4 }}>Waiting for the card payment…</p>
+          <p style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 10 }}>The sale completes automatically once Paystack confirms it.</p>
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'center', flexWrap: 'wrap' }}>
+            <button type="button" onClick={card.openForm} style={{ padding: '8px 14px', borderRadius: 8, border: '1px solid var(--pine)', background: '#fff', color: 'var(--pine)', fontSize: 13 }}>Reopen card form</button>
+            <button type="button" onClick={card.checkNow} style={{ padding: '8px 14px', borderRadius: 8, border: '1px solid var(--border)', background: '#fff', color: 'var(--ink)', fontSize: 13 }}>Check payment</button>
+            <button type="button" onClick={card.cancel} style={{ padding: '8px 14px', borderRadius: 8, border: '1px solid var(--border)', background: '#fff', color: 'var(--muted)', fontSize: 13 }}>Cancel</button>
+          </div>
+        </div>
+      )}
+      {card.status === 'success' && (
+        <div style={{ textAlign: 'center', padding: '10px 0', color: 'var(--pine)' }}>
+          <CheckCircle size={24} style={{ marginBottom: 6 }} />
+          <p style={{ fontSize: 13, fontWeight: 600 }}>Card payment received{card.paymentRef ? ` — ${card.paymentRef}` : ''}</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function CheckoutModal({ cart, subtotal, tax, total, settings, onClose, onComplete }) {
   const [method, setMethod] = useState('cash');
   const [tendered, setTendered] = useState('');
@@ -1672,6 +1833,10 @@ function CheckoutModal({ cart, subtotal, tax, total, settings, onClose, onComple
   const [customerPhone, setCustomerPhone] = useState('');
   const pollTimer = useRef(null);
   const needsRx = cart.some((i) => i.requiresRx);
+  const card = usePaystackCard({
+    amount: total, refPrefix: 'POS',
+    onPaid: (paymentRef) => onComplete({ method: 'card', tendered: total, change: 0, paymentRef }),
+  });
   const tenderedNum = parseFloat(tendered) || 0;
   const change = method === 'cash' ? Math.max(0, tenderedNum - total) : 0;
   const canComplete = (!needsRx || rxConfirmed) && (method !== 'cash' || tenderedNum >= total) && (method !== 'account' || customerName.trim().length > 0);
@@ -1890,6 +2055,8 @@ function CheckoutModal({ cart, subtotal, tax, total, settings, onClose, onComple
           </div>
         )}
 
+        {method === 'card' && <CardPaymentPanel card={card} disabled={needsRx && !rxConfirmed} />}
+
         {needsRx && (
           <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 12, marginBottom: 16, padding: 10, background: 'var(--amber-pale)', borderRadius: 8, color: '#5C3A12' }}>
             <input type="checkbox" checked={rxConfirmed} onChange={(e) => setRxConfirmed(e.target.checked)} style={{ marginTop: 2 }} />
@@ -1897,7 +2064,7 @@ function CheckoutModal({ cart, subtotal, tax, total, settings, onClose, onComple
           </label>
         )}
 
-        {method !== 'mpesa' && (
+        {method !== 'mpesa' && method !== 'card' && (
           <button onClick={() => onComplete({
             method, tendered: method === 'cash' ? tenderedNum : total, change,
             customerName: method === 'account' ? customerName.trim() : undefined,
@@ -1907,6 +2074,27 @@ function CheckoutModal({ cart, subtotal, tax, total, settings, onClose, onComple
             background: canComplete ? 'var(--pine)' : '#B9C4B4', color: '#fff'
           }}>Confirm payment</button>
         )}
+      </div>
+    </div>
+  );
+}
+
+// Collects a customer's "on account" balance by card through Paystack, with the
+// same confirm-before-recording flow as a card checkout.
+function AccountCardModal({ customer, settings, onClose, onSettled }) {
+  const card = usePaystackCard({ amount: customer.total, refPrefix: 'ACC', onPaid: (ref) => onSettled(ref) });
+  return (
+    <div className="pos-modal-backdrop">
+      <div className="pos-modal" style={{ background: '#fff', borderRadius: 14, padding: 24, maxHeight: '90vh', overflowY: 'auto' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+          <span className="pos-serif" style={{ fontSize: 18, fontWeight: 700 }}>Card payment</span>
+          <button className="pos-icon-btn" onClick={() => { card.cancel(); onClose(); }} title="Close" style={{ color: 'var(--muted)' }}><X size={18} /></button>
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 15, marginBottom: 14 }}>
+          <span>{customer.name}</span>
+          <span className="pos-mono" style={{ fontWeight: 700 }}>{formatMoney(customer.total, settings.currency)}</span>
+        </div>
+        <CardPaymentPanel card={card} />
       </div>
     </div>
   );
@@ -2126,6 +2314,9 @@ function ReceiptModal({ sale, settings, onClose }) {
         )}
         {sale.paymentMethod === 'mpesa' && sale.mpesaReceipt && (
           <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--muted)' }}><span>M-Pesa receipt</span><span>{sale.mpesaReceipt}</span></div>
+        )}
+        {sale.paymentMethod === 'card' && sale.paymentRef && (
+          <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--muted)', gap: 10 }}><span>Card ref</span><span style={{ wordBreak: 'break-all', textAlign: 'right' }}>{sale.paymentRef}</span></div>
         )}
         {sale.paymentMethod === 'account' && (
           <>
@@ -2967,6 +3158,7 @@ function AccountsTab({ sales, settings, settleAccountSale }) {
   const [busyId, setBusyId] = useState(null);
   const [query, setQuery] = useState('');
   const [mpesaPrompt, setMpesaPrompt] = useState(null); // { sale, name, phone }
+  const [cardPrompt, setCardPrompt] = useState(null); // { sale, name }
 
   const accountSales = sales.filter((s) => s.paymentMethod === 'account' && !s.voided);
   const outstanding = accountSales.filter((s) => !s.settled).sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
@@ -2992,9 +3184,22 @@ function AccountsTab({ sales, settings, settleAccountSale }) {
       setMpesaPrompt({ sale, name: customer.name, phone: customer.phone });
       return;
     }
+    // Same for card: it has to go through Paystack, not just be ticked off.
+    if (method === 'card') {
+      setCardPrompt({ sale, name: customer.name });
+      return;
+    }
     setBusyId(sale.id);
     await settleAccountSale(sale.id, method);
     setBusyId(null);
+  };
+
+  const handleCardSettled = async (paymentRef) => {
+    if (!cardPrompt) return;
+    setBusyId(cardPrompt.sale.id);
+    await settleAccountSale(cardPrompt.sale.id, 'card', undefined, paymentRef);
+    setBusyId(null);
+    setCardPrompt(null);
   };
 
   const handleMpesaSettled = async (receipt) => {
@@ -3068,7 +3273,7 @@ function AccountsTab({ sales, settings, settleAccountSale }) {
                       <option value="mpesa">M-Pesa</option>
                     </select>
                     <button disabled={busyId === s.id} onClick={() => markPaid(s, c)} style={{ background: 'var(--pine)', color: '#fff', border: 'none', borderRadius: 6, padding: '5px 10px', fontSize: 11, fontWeight: 600, opacity: busyId === s.id ? 0.6 : 1 }}>
-                      {busyId === s.id ? 'Saving…' : (settleMethod[s.id] || 'cash') === 'mpesa' ? 'Prompt for M-Pesa' : 'Mark as paid'}
+                      {busyId === s.id ? 'Saving…' : (settleMethod[s.id] || 'cash') === 'mpesa' ? 'Prompt for M-Pesa' : (settleMethod[s.id] || 'cash') === 'card' ? 'Pay by card' : 'Mark as paid'}
                     </button>
                   </>
                 )}
@@ -3085,12 +3290,21 @@ function AccountsTab({ sales, settings, settleAccountSale }) {
           <div style={{ background: 'var(--paper)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
             {settledRecently.map((s) => (
               <div key={s.id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12.5, padding: '10px 16px', borderBottom: '1px solid var(--border)', color: 'var(--muted)' }}>
-                <span>{s.customerName} · settled {s.settledAt ? new Date(s.settledAt).toLocaleDateString() : '—'}{s.settledMethod ? ` via ${s.settledMethod}` : ''}{s.mpesaReceipt ? ` (${s.mpesaReceipt})` : ''}</span>
+                <span>{s.customerName} · settled {s.settledAt ? new Date(s.settledAt).toLocaleDateString() : '—'}{s.settledMethod ? ` via ${s.settledMethod}` : ''}{s.mpesaReceipt ? ` (${s.mpesaReceipt})` : ''}{s.paymentRef ? ` (${s.paymentRef})` : ''}</span>
                 <span className="pos-mono">{formatMoney(s.total, settings.currency)}</span>
               </div>
             ))}
           </div>
         </>
+      )}
+
+      {cardPrompt && (
+        <AccountCardModal
+          customer={{ name: cardPrompt.name, total: cardPrompt.sale.total }}
+          settings={settings}
+          onClose={() => setCardPrompt(null)}
+          onSettled={handleCardSettled}
+        />
       )}
 
       {mpesaPrompt && (
@@ -3668,7 +3882,7 @@ function App() {
   // off what they owe, recording how and by whom. mpesaReceipt is only
   // set when the balance was collected via a live STK push prompt (see
   // AccountMpesaModal) rather than just picked from the method dropdown.
-  const settleAccountSale = async (saleId, method, mpesaReceipt) => {
+  const settleAccountSale = async (saleId, method, mpesaReceipt, paymentRef) => {
     const settledBy = user?.name || 'Unknown';
     const nextSales = sales.map((s) => (s.id === saleId ? {
       ...s,
@@ -3677,20 +3891,21 @@ function App() {
       settledBy,
       settledMethod: method || 'cash',
       ...(mpesaReceipt ? { mpesaReceipt } : {}),
+      ...(paymentRef ? { paymentRef } : {}),
     } : s));
     setSales(nextSales);
     writeCache('sales', nextSales);
 
     try {
       const { error } = await invokeFn('record-sale', {
-        body: { token: sessionToken, action: 'settle', id: saleId, method, settledBy, mpesaReceipt },
+        body: { token: sessionToken, action: 'settle', id: saleId, method, settledBy, mpesaReceipt, paymentRef },
       });
       if (error) {
-        if (error.network) queueSyncAction({ type: 'record-sale', saleAction: 'settle', id: saleId, method, settledBy, mpesaReceipt });
+        if (error.network) queueSyncAction({ type: 'record-sale', saleAction: 'settle', id: saleId, method, settledBy, mpesaReceipt, paymentRef });
         else console.error('Sale settle rejected (not retried):', error.message);
       }
     } catch (e) {
-      queueSyncAction({ type: 'record-sale', saleAction: 'settle', id: saleId, method, settledBy, mpesaReceipt });
+      queueSyncAction({ type: 'record-sale', saleAction: 'settle', id: saleId, method, settledBy, mpesaReceipt, paymentRef });
     }
     setLastSynced(new Date().toLocaleTimeString());
   };
