@@ -1126,7 +1126,7 @@ function EmptyState({ icon: Icon, title, subtitle, compact }) {
 /* Staff / Cashier POS                                                     */
 /* ---------------------------------------------------------------------- */
 
-function StaffPOS({ inventory, sales, settings, user, addSale, updateStock, lastSynced, onLogout, saveInventory, logInventoryChange, voidSale, settleAccountSale }) {
+function StaffPOS({ inventory, sales, settings, user, addSale, updateStock, lastSynced, onLogout, saveInventory, adjustStockBy, logInventoryChange, voidSale, settleAccountSale }) {
   const [query, setQuery] = useState('');
   const [category, setCategory] = useState('All');
   const [cart, setCart] = useState([]);
@@ -1564,7 +1564,7 @@ function StaffPOS({ inventory, sales, settings, user, addSale, updateStock, last
           <button onClick={() => setInventoryOpen(false)} style={{ marginBottom: 16, background: 'none', border: '1px solid var(--border)', borderRadius: 8, padding: '8px 14px', fontSize: 13, display: 'flex', alignItems: 'center', gap: 6 }}>
             <ChevronRight size={14} style={{ transform: 'rotate(180deg)' }} /> Back to sales
           </button>
-          <InventoryTab inventory={inventory} settings={settings} saveInventory={saveInventory} user={user} logInventoryChange={logInventoryChange} />
+          <InventoryTab inventory={inventory} settings={settings} saveInventory={saveInventory} adjustStockBy={adjustStockBy} user={user} logInventoryChange={logInventoryChange} />
         </div>
       )}
       {accountsOpen && (
@@ -2509,7 +2509,7 @@ function ReceiptModal({ sale, settings, onClose }) {
 /* ---------------------------------------------------------------------- */
 
 function AdminConsole({ inventory, sales, staffList, settings, user, onLogout, lastSynced,
-  saveInventory, saveStaff, saveSettings, inventoryLog, logInventoryChange, voidSale, settleAccountSale }) {
+  saveInventory, adjustStockBy, saveStaff, saveSettings, inventoryLog, logInventoryChange, voidSale, settleAccountSale }) {
   const [tab, setTab] = useState('dashboard');
   // Lets the dashboard open Inventory already filtered (e.g. "needs
   // reordering", or one product searched). `n` re-mounts the tab so the
@@ -2553,7 +2553,7 @@ function AdminConsole({ inventory, sales, staffList, settings, user, onLogout, l
         </div>
         <div className="pos-admin-content pos-scroll">
           {tab === 'dashboard' && <DashboardTab inventory={inventory} sales={sales} settings={settings} onNavigate={openTab} />}
-          {tab === 'inventory' && <InventoryTab key={invJump ? invJump.n : 'inv'} initialFilter={invJump && invJump.filter} initialQuery={invJump && invJump.query} inventory={inventory} settings={settings} saveInventory={saveInventory} user={user} logInventoryChange={logInventoryChange} />}
+          {tab === 'inventory' && <InventoryTab key={invJump ? invJump.n : 'inv'} initialFilter={invJump && invJump.filter} initialQuery={invJump && invJump.query} inventory={inventory} settings={settings} saveInventory={saveInventory} adjustStockBy={adjustStockBy} user={user} logInventoryChange={logInventoryChange} />}
           {tab === 'activity' && <ActivityTab inventoryLog={inventoryLog} settings={settings} />}
           {tab === 'sales' && <SalesTab sales={sales} inventory={inventory} settings={settings} voidSale={voidSale} />}
           {tab === 'accounts' && <AccountsTab sales={sales} settings={settings} settleAccountSale={settleAccountSale} />}
@@ -3080,7 +3080,7 @@ function InvPrice({ p, settings, align }) {
   );
 }
 
-function InventoryTab({ inventory, settings, saveInventory, user, logInventoryChange, initialFilter, initialQuery }) {
+function InventoryTab({ inventory, settings, saveInventory, adjustStockBy, user, logInventoryChange, initialFilter, initialQuery }) {
   const isCompact = useMediaQuery('(max-width: 860px)');
   const [modalProduct, setModalProduct] = useState(null); // null = closed, {} = new, obj = edit
   const [drugInfoProduct, setDrugInfoProduct] = useState(null);
@@ -3172,7 +3172,15 @@ function InventoryTab({ inventory, settings, saveInventory, user, logInventoryCh
     setModalProduct(null);
     if (product.id) {
       const before = inventory.find((p) => p.id === product.id);
-      const ok = await persist(inventory.map((p) => (p.id === product.id ? product : p)), `Couldn't save "${product.name}".`);
+      // Stock typed into the form is applied as a +/- change (atomic on the
+      // server); the rest of the form is saved with stock left untouched.
+      const stockDelta = before && adjustStockBy ? (Number(product.stock) || 0) - (Number(before.stock) || 0) : 0;
+      const toSave = stockDelta !== 0 ? { ...product, stock: before.stock } : product;
+      const ok = await persist(inventory.map((p) => (p.id === product.id ? toSave : p)), `Couldn't save "${product.name}".`);
+      if (ok && stockDelta !== 0) {
+        const r = await adjustStockBy(product.id, stockDelta);
+        if (!r.ok) setNotice({ kind: 'error', text: `Saved "${product.name}", but the stock change wasn't applied. ${r.message || ''}` });
+      }
       if (ok && logInventoryChange && before) {
         logInventoryChange({
           action: 'edit',
@@ -3266,22 +3274,29 @@ function InventoryTab({ inventory, settings, saveInventory, user, logInventoryCh
     const current = inventory.find((x) => x.id === p.id) || p;
     if (Number.isNaN(next) || next < 0 || next === Number(current.stock)) return;
     const before = productSnap(current);
-    const updated = { ...current, stock: next };
+    const delta = next - (Number(current.stock) || 0);
     setBusyIds((s) => new Set(s).add(p.id));
-    const ok = await persist(inventory.map((x) => (x.id === p.id ? updated : x)), `Couldn't update stock for "${p.name}".`);
+    // Relative change, applied atomically on the server (see adjustStockBy).
+    const res = adjustStockBy
+      ? await adjustStockBy(p.id, delta)
+      : { ok: await persist(inventory.map((x) => (x.id === p.id ? { ...current, stock: next } : x)), `Couldn't update stock for "${p.name}".`), newStock: next };
     setBusyIds((s) => { const n = new Set(s); n.delete(p.id); return n; });
     cancelStock(p);
-    if (ok) {
-      setNotice({ kind: 'ok', text: `${p.name}: stock ${before.stock} → ${next}` });
-      if (logInventoryChange) {
-        logInventoryChange({
-          action: 'edit',
-          productName: p.name,
-          sku: p.sku,
-          detail: `Stock ${before.stock} → ${next} (quick adjust)`,
-          before, after: productSnap(updated), refId: p.id,
-        });
-      }
+    if (!res.ok) {
+      if (res.message) setNotice({ kind: 'error', text: `Couldn't update stock for "${p.name}". ${res.message}` });
+      return;
+    }
+    const finalStock = Number.isFinite(res.newStock) ? res.newStock : next;
+    const sign = delta > 0 ? `+${delta}` : `${delta}`;
+    setNotice({ kind: 'ok', text: `${p.name}: stock ${before.stock} → ${finalStock}${finalStock !== next ? ' (a sale landed meanwhile)' : ''}` });
+    if (logInventoryChange) {
+      logInventoryChange({
+        action: 'edit',
+        productName: p.name,
+        sku: p.sku,
+        detail: `Stock ${before.stock} → ${finalStock} (quick adjust ${sign})`,
+        before, after: productSnap({ ...current, stock: finalStock }), refId: p.id,
+      });
     }
   };
 
@@ -4791,7 +4806,10 @@ function App() {
       const before = prevById.get(id);
       const costChanged = !!costMap && Object.prototype.hasOwnProperty.call(costMap, id);
       if (!before || costChanged || JSON.stringify(before) !== JSON.stringify(product)) {
-        actions.push({ type: 'upsert', product: costChanged ? { ...product, cost: costMap[id] } : product });
+        // If this edit doesn't change stock, tell the server to leave the stock
+        // column alone, so a sale that landed meanwhile isn't overwritten.
+        const keepStock = !!before && Number(before.stock) === Number(product.stock);
+        actions.push({ type: 'upsert', product: { ...product, ...(costChanged ? { cost: costMap[id] } : null), ...(keepStock ? { keepStock: true } : null) } });
       }
     }
     for (const id of prevById.keys()) {
@@ -4978,6 +4996,51 @@ function App() {
     }
   };
 
+  // Relative stock change for Quick adjust. Sends "+N" / "-N" to the same
+  // atomic increment/decrement the till uses, so a sale that lands while
+  // someone is adjusting is never overwritten — the server applies the
+  // change to whatever the stock is *now*. Returns { ok, newStock, message }.
+  const adjustStockBy = async (id, delta) => {
+    const d = Math.trunc(Number(delta));
+    if (!id || !Number.isFinite(d) || d === 0) return { ok: false, message: 'Nothing to change.' };
+    const items = [{ id, qty: Math.abs(d) }];
+    const direction = d > 0 ? 'increment' : 'decrement';
+    const apply = (amount) => setInventory((cur) => {
+      const nxt = cur.map((p) => (p.id === id ? { ...p, stock: Math.max(0, (Number(p.stock) || 0) + amount) } : p));
+      writeCache('inventory', nxt);
+      return nxt;
+    });
+    apply(d); // optimistic
+    try {
+      const { data, error } = await invokeFn('adjust-stock', { body: { token: sessionToken, items, direction } });
+      if (error) {
+        if (error.network) {
+          queueSyncAction({ type: 'adjust-stock', items, direction });
+          refreshPending();
+          return { ok: true, queued: true };
+        }
+        apply(-d); // rejected — undo the optimistic change
+        return { ok: false, message: error.message };
+      }
+      const r = data && data.results && data.results[0];
+      if (r && r.ok && Number.isFinite(Number(r.newStock))) {
+        // Snap to the server's real number (it may differ if a till sold meanwhile).
+        setInventory((cur) => {
+          const nxt = cur.map((p) => (p.id === id ? { ...p, stock: Number(r.newStock) } : p));
+          writeCache('inventory', nxt);
+          return nxt;
+        });
+        setLastSynced(new Date().toLocaleTimeString());
+        return { ok: true, newStock: Number(r.newStock) };
+      }
+      return { ok: true };
+    } catch (e) {
+      queueSyncAction({ type: 'adjust-stock', items, direction });
+      refreshPending();
+      return { ok: true, queued: true };
+    }
+  };
+
   // Reverses a completed sale: marks it voided (kept in the record for the
   // audit trail, not deleted) and restocks whatever it sold. Available to
   // both admins (any sale) and cashiers (their own same-day sales).
@@ -5091,7 +5154,7 @@ function App() {
     return (
       <AdminConsole inventory={adminInventory} sales={sales} staffList={staffList} settings={settings}
         user={user} onLogout={handleLogout} lastSynced={lastSynced}
-        saveInventory={saveInventoryAdmin} saveStaff={saveStaffList} saveSettings={saveSettingsFn}
+        saveInventory={saveInventoryAdmin} adjustStockBy={adjustStockBy} saveStaff={saveStaffList} saveSettings={saveSettingsFn}
         inventoryLog={inventoryLog} logInventoryChange={logInventoryChange}
         voidSale={voidSale} settleAccountSale={settleAccountSale} />
     );
@@ -5100,7 +5163,7 @@ function App() {
   return (
     <StaffPOS inventory={inventory} sales={sales} settings={settings} user={user}
       addSale={addSale} updateStock={updateStock} lastSynced={lastSynced} onLogout={handleLogout}
-      saveInventory={saveInventory} logInventoryChange={logInventoryChange} voidSale={voidSale}
+      saveInventory={saveInventory} adjustStockBy={adjustStockBy} logInventoryChange={logInventoryChange} voidSale={voidSale}
       settleAccountSale={settleAccountSale} />
   );
 }
