@@ -4,7 +4,7 @@ import {
   ShoppingCart, Plus, Minus, Trash2, Search, LogOut, Package, TrendingUp,
   AlertTriangle, Users, Settings as SettingsIcon, Receipt, CheckCircle, X,
   Pill, Edit2, ChevronRight, Banknote, CreditCard, Smartphone, LayoutDashboard,
-  ClipboardList, Info, Printer, MessageCircle, Camera, MoreHorizontal
+  ClipboardList, Info, Printer, MessageCircle, Camera, MoreHorizontal, Check, ArrowRight, Clock
 } from 'https://esm.sh/lucide-react@0.383.0?deps=react@18';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
@@ -120,6 +120,54 @@ function expiryLabel(days) {
   if (days < 0) return `Expired ${Math.abs(days)}d ago`;
   if (days === 0) return 'Expires today';
   return `Expires in ${days}d`;
+}
+
+// The dashboard and the Inventory tab both use these, so "low", "out" and
+// "expiring" always mean the same thing — and the counts match everywhere.
+function stockState(p) {
+  const stock = Number(p.stock) || 0;
+  if (stock <= 0) return 'out';
+  return stock <= (Number(p.reorderLevel) || 0) ? 'low' : 'ok';
+}
+// Expiry only raises an alert while there is stock on the shelf to act on.
+function expiryState(p) {
+  if ((Number(p.stock) || 0) <= 0) return null;
+  const d = daysUntilExpiry(p.expiry);
+  if (d === null) return null;
+  if (d < 0) return 'expired';
+  return d <= EXPIRY_WINDOW_DAYS ? 'soon' : null;
+}
+function formatShortDate(dateStr) {
+  if (!dateStr) return '—';
+  const d = new Date(dateStr);
+  return isNaN(d.getTime()) ? String(dateStr) : d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+}
+// "10:10 PM" today, "Yesterday 10:10 PM", otherwise "24 Oct, 10:10 PM".
+function formatWhen(iso) {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return '';
+  const time = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  const dayDiff = Math.round((new Date().setHours(0, 0, 0, 0) - new Date(d).setHours(0, 0, 0, 0)) / 86400000);
+  if (dayDiff === 0) return time;
+  if (dayDiff === 1) return `Yesterday ${time}`;
+  return `${d.toLocaleDateString([], { day: 'numeric', month: 'short' })}, ${time}`;
+}
+
+// Small coloured label used for stock / expiry / sale status.
+const PILL_TONES = {
+  red:   { color: 'var(--red)', bg: 'var(--red-pale)' },
+  amber: { color: 'color-mix(in srgb, var(--amber) 72%, #000)', bg: 'var(--amber-pale)' },
+  green: { color: 'var(--pine)', bg: 'var(--pine-pale)' },
+  grey:  { color: 'var(--muted)', bg: 'var(--bg)' },
+};
+function StatusPill({ tone = 'grey', children, title, style }) {
+  const t = PILL_TONES[tone] || PILL_TONES.grey;
+  return (
+    <span title={title} style={{
+      display: 'inline-flex', alignItems: 'center', padding: '2px 8px', borderRadius: 999, fontSize: 11, fontWeight: 600,
+      lineHeight: 1.5, whiteSpace: 'nowrap', color: t.color, background: t.bg, ...style
+    }}>{children}</span>
+  );
 }
 
 /* ---------------------------------------------------------------------- */
@@ -854,6 +902,58 @@ ${t.fontImport}
   .pos-stat-grid { grid-template-columns: repeat(2, 1fr) !important; }
   .pos-dash-columns { grid-template-columns: 1fr !important; gap: 20px !important; }
   .pos-inv-toolbar { flex-direction: column !important; align-items: stretch !important; gap: 10px !important; }
+}
+
+/* Dashboard panels — a header, a scrolling list of tappable rows, a footer. */
+.pos-panel { background: var(--paper); border: 1px solid var(--border); border-radius: 12px; display: flex; flex-direction: column; min-width: 0; overflow: hidden; }
+.pos-panel-head { display: flex; align-items: center; gap: 10px; padding: 14px 16px 12px; border-bottom: 1px solid var(--border); }
+.pos-panel-icon { width: 28px; height: 28px; border-radius: 8px; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.pos-panel-body { overflow-y: auto; max-height: 356px; }
+.pos-panel-sub { padding: 8px 16px 6px; font-size: 11px; font-weight: 700; letter-spacing: 0.5px; text-transform: uppercase; background: var(--bg); border-bottom: 1px solid var(--border); }
+.pos-link-btn { display: inline-flex; align-items: center; gap: 4px; background: none; border: none; padding: 4px 8px; border-radius: 6px; font-size: 12px; font-weight: 600; color: var(--pine); white-space: nowrap; }
+.pos-link-btn:hover { background: var(--pine-pale); }
+.pos-row { display: flex; align-items: center; gap: 12px; padding: 10px 16px; border-bottom: 1px solid var(--border); font-size: 13px; }
+.pos-row:last-child { border-bottom: none; }
+.pos-row-btn { display: flex; align-items: center; gap: 12px; width: 100%; padding: 10px 16px; background: none; border: none; border-bottom: 1px solid var(--border); text-align: left; color: inherit; font-size: 13px; }
+.pos-row-btn:last-child { border-bottom: none; }
+.pos-row-btn:hover { background: var(--pine-pale); }
+.pos-row-btn:focus-visible, .pos-link-btn:focus-visible, .pos-chip:focus-visible, .pos-stat-btn:focus-visible { outline: 2px solid var(--pine-light); outline-offset: -2px; }
+.pos-ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.pos-stat-btn { display: block; width: 100%; padding: 0; border: none; background: none; text-align: left; color: inherit; border-radius: 12px; transition: transform .12s ease, box-shadow .12s ease; }
+.pos-stat-btn:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(0,0,0,0.07); }
+
+/* Inventory: filter chips, status pills, inline stock stepper */
+.pos-chip { display: inline-flex; align-items: center; gap: 7px; padding: 6px 12px; border-radius: 999px; border: 1px solid var(--border); background: var(--paper); color: var(--ink); font-size: 12.5px; font-weight: 600; white-space: nowrap; flex-shrink: 0; }
+.pos-chip:hover { background: var(--pine-pale); }
+.pos-chip .pos-chip-n { font-size: 11px; font-weight: 700; padding: 0 7px; min-width: 20px; text-align: center; border-radius: 999px; background: var(--pine-pale); color: var(--pine); line-height: 1.6; }
+.pos-chip .pos-chip-n.warn { background: var(--red-pale); color: var(--red); }
+.pos-chip.on, .pos-chip.on:hover { background: var(--pine); border-color: var(--pine); color: #fff; }
+.pos-chip.on .pos-chip-n, .pos-chip.on .pos-chip-n.warn { background: rgba(255,255,255,0.22); color: #fff; }
+.pos-chip-row { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 2px; scrollbar-width: none; }
+.pos-chip-row::-webkit-scrollbar { display: none; }
+.pos-field { padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border); font-size: 13px; background: #fff; color: var(--ink); height: 36px; }
+.pos-inv-row { transition: background-color .12s ease; }
+.pos-inv-row:hover { background: color-mix(in srgb, var(--pine-pale) 55%, transparent); }
+.pos-stepper { display: inline-flex; align-items: center; border: 1px solid var(--border); border-radius: 8px; background: #fff; overflow: hidden; flex-shrink: 0; }
+.pos-stepper.dirty { border-color: var(--pine); box-shadow: 0 0 0 2px var(--pine-pale); }
+.pos-stepper button { width: 28px; height: 30px; border: none; background: none; display: inline-flex; align-items: center; justify-content: center; color: var(--muted); padding: 0; }
+.pos-stepper button:hover:not(:disabled) { background: var(--pine-pale); color: var(--pine); }
+.pos-stepper button:disabled { opacity: 0.35; cursor: not-allowed; }
+.pos-stepper input { width: 46px; height: 30px; border: none; border-left: 1px solid var(--border); border-right: 1px solid var(--border); border-radius: 0; text-align: center; font-size: 13px; font-weight: 600; background: transparent; padding: 0; -moz-appearance: textfield; }
+.pos-stepper input::-webkit-outer-spin-button, .pos-stepper input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.pos-stepper input:focus { outline: none; background: var(--pine-pale); }
+.pos-mini-btn { width: 28px; height: 28px; border-radius: 8px; border: 1px solid var(--border); background: #fff; color: var(--muted); display: inline-flex; align-items: center; justify-content: center; padding: 0; flex-shrink: 0; }
+.pos-mini-btn:hover:not(:disabled) { background: var(--pine-pale); }
+.pos-mini-btn.ok { background: var(--pine); border-color: var(--pine); color: #fff; }
+.pos-mini-btn.ok:hover:not(:disabled) { background: var(--pine-light); }
+.pos-mini-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.pos-inv-card { background: var(--paper); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; margin-bottom: 10px; }
+@media (max-width: 860px) {
+  .pos-stepper button { width: 38px; height: 38px; }
+  .pos-stepper input { width: 54px; height: 38px; font-size: 16px; }
+  .pos-mini-btn { width: 38px; height: 38px; }
+  .pos-field { height: 40px; font-size: 16px; }
+  .pos-panel-body { max-height: 420px; }
 }
 
 /* Printing a receipt: hide everything else on the page, show only the
@@ -2411,9 +2511,14 @@ function ReceiptModal({ sale, settings, onClose }) {
 function AdminConsole({ inventory, sales, staffList, settings, user, onLogout, lastSynced,
   saveInventory, saveStaff, saveSettings, inventoryLog, logInventoryChange, voidSale, settleAccountSale }) {
   const [tab, setTab] = useState('dashboard');
+  // Lets the dashboard open Inventory already filtered (e.g. "needs
+  // reordering", or one product searched). `n` re-mounts the tab so the
+  // preset is applied even if Inventory was already the open tab.
+  const [invJump, setInvJump] = useState(null);
+  const openTab = (key, jump) => { setInvJump(jump ? { ...jump, n: Date.now() } : null); setTab(key); };
   const todayKey = localDateStr(new Date());
   const badges = {
-    inventory: inventory.filter((p) => p.stock <= p.reorderLevel).length,
+    inventory: inventory.filter((p) => stockState(p) !== 'ok').length,
     accounts: sales.filter((s) => s.paymentMethod === 'account' && !s.voided && !s.settled).length,
     activity: (inventoryLog || []).filter((e) => activityKind(e) === 'void' && localDateStr(new Date(e.timestamp)) === todayKey).length,
   };
@@ -2434,7 +2539,7 @@ function AdminConsole({ inventory, sales, staffList, settings, user, onLogout, l
       <div className="pos-admin-layout">
         <div className="pos-admin-nav">
           {navItems.map(({ key, label, Icon }) => (
-            <button key={key} onClick={() => setTab(key)} className="pos-admin-nav-btn" style={{
+            <button key={key} onClick={() => openTab(key)} className="pos-admin-nav-btn" style={{
               display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px',
               borderRadius: 8, border: 'none', marginBottom: 4, textAlign: 'left', fontSize: 14,
               background: tab === key ? 'var(--pine)' : 'transparent', color: tab === key ? '#fff' : 'var(--ink)'
@@ -2447,8 +2552,8 @@ function AdminConsole({ inventory, sales, staffList, settings, user, onLogout, l
           ))}
         </div>
         <div className="pos-admin-content pos-scroll">
-          {tab === 'dashboard' && <DashboardTab inventory={inventory} sales={sales} settings={settings} />}
-          {tab === 'inventory' && <InventoryTab inventory={inventory} settings={settings} saveInventory={saveInventory} user={user} logInventoryChange={logInventoryChange} />}
+          {tab === 'dashboard' && <DashboardTab inventory={inventory} sales={sales} settings={settings} onNavigate={openTab} />}
+          {tab === 'inventory' && <InventoryTab key={invJump ? invJump.n : 'inv'} initialFilter={invJump && invJump.filter} initialQuery={invJump && invJump.query} inventory={inventory} settings={settings} saveInventory={saveInventory} user={user} logInventoryChange={logInventoryChange} />}
           {tab === 'activity' && <ActivityTab inventoryLog={inventoryLog} settings={settings} />}
           {tab === 'sales' && <SalesTab sales={sales} inventory={inventory} settings={settings} voidSale={voidSale} />}
           {tab === 'accounts' && <AccountsTab sales={sales} settings={settings} settleAccountSale={settleAccountSale} />}
@@ -2460,9 +2565,9 @@ function AdminConsole({ inventory, sales, staffList, settings, user, onLogout, l
   );
 }
 
-function StatCard({ label, value, accent, sub, delta, deltaLabel }) {
-  return (
-    <div style={{ background: 'var(--paper)', border: '1px solid var(--border)', borderRadius: 12, padding: '16px 18px' }}>
+function StatCard({ label, value, accent, sub, delta, deltaLabel, onClick, title }) {
+  const card = (
+    <div style={{ background: 'var(--paper)', border: '1px solid var(--border)', borderRadius: 12, padding: '16px 18px', height: '100%' }}>
       <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 6 }}>{label}</div>
       <div className="pos-serif" style={{ fontSize: 24, fontWeight: 700, color: accent || 'var(--ink)' }}>{value}</div>
       {(sub || delta != null) && (
@@ -2473,6 +2578,8 @@ function StatCard({ label, value, accent, sub, delta, deltaLabel }) {
       )}
     </div>
   );
+  // Cards that lead somewhere (low stock → Inventory) become real buttons.
+  return onClick ? <button type="button" className="pos-stat-btn" onClick={onClick} title={title}>{card}</button> : card;
 }
 
 // Sales ex-VAT minus buying cost. Uses the cost frozen onto each sale line;
@@ -2580,7 +2687,32 @@ const DASHBOARD_RANGES = [
   { key: 'month', label: 'This month' },
 ];
 
-function DashboardTab({ inventory, sales, settings }) {
+// One card of the dashboard's lower half: icon + title + count, a "view all"
+// link, the rows, and (when the list was cut short) a "+N more" footer.
+function DashPanel({ icon: Icon, tone = 'green', title, count, actionLabel, onAction, moreCount = 0, moreLabel, children }) {
+  const t = PILL_TONES[tone] || PILL_TONES.green;
+  return (
+    <section className="pos-panel">
+      <header className="pos-panel-head">
+        <span className="pos-panel-icon" style={{ background: t.bg, color: t.color }}><Icon size={15} /></span>
+        <h3 className="pos-serif pos-ellipsis" style={{ fontSize: 15, fontWeight: 600, flex: 1 }}>{title}</h3>
+        {count != null && <StatusPill tone={count > 0 ? tone : 'grey'}>{count}</StatusPill>}
+        {onAction && <button type="button" className="pos-link-btn" onClick={onAction}>{actionLabel || 'View all'} <ArrowRight size={12} /></button>}
+      </header>
+      <div className="pos-panel-body pos-scroll">{children}</div>
+      {moreCount > 0 && onAction && (
+        <div style={{ borderTop: '1px solid var(--border)', padding: '8px 12px', display: 'flex', justifyContent: 'center' }}>
+          <button type="button" className="pos-link-btn" onClick={onAction}>+{moreCount} more{moreLabel ? ` ${moreLabel}` : ''} <ArrowRight size={12} /></button>
+        </div>
+      )}
+    </section>
+  );
+}
+
+const DASH_PANEL_ROWS = 6;
+
+function DashboardTab({ inventory, sales, settings, onNavigate }) {
+  const go = (tab, jump) => { if (onNavigate) onNavigate(tab, jump); };
   const [range, setRange] = useState('today');
   const rangeLabel = DASHBOARD_RANGES.find((r) => r.key === range).label;
   const win = dashboardWindow(range);
@@ -2598,11 +2730,18 @@ function DashboardTab({ inventory, sales, settings }) {
   const prevFin = summarizeProfit(prevSales, costById);
   const stockAtCost = inventory.reduce((sum, p) => sum + p.stock * (p.cost || 0), 0);
   const stockAtRetail = inventory.reduce((sum, p) => sum + p.stock * p.price, 0);
-  const lowStock = inventory.filter((p) => p.stock <= p.reorderLevel);
+  // Most urgent first: sold out, then the furthest below its reorder level.
+  const restockFill = (p) => (p.stock <= 0 ? -1 : p.stock / Math.max(1, p.reorderLevel));
+  const lowStock = inventory
+    .filter((p) => stockState(p) !== 'ok')
+    .sort((a, b) => restockFill(a) - restockFill(b) || a.name.localeCompare(b.name));
+  // Oldest expiry first, so anything already past its date leads the list.
   const expiringSoon = inventory
-    .filter((p) => p.stock > 0 && daysUntilExpiry(p.expiry) !== null && daysUntilExpiry(p.expiry) <= EXPIRY_WINDOW_DAYS)
+    .filter((p) => expiryState(p) !== null)
     .sort((a, b) => daysUntilExpiry(a.expiry) - daysUntilExpiry(b.expiry));
-  const recent = [...sales].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp)).slice(0, 6);
+  const expiredNow = expiringSoon.filter((p) => expiryState(p) === 'expired');
+  const expiredAtCost = expiredNow.reduce((sum, p) => sum + p.stock * (p.cost || 0), 0);
+  const recent = [...sales].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp)).slice(0, DASH_PANEL_ROWS);
 
   // What's actually moving, for the selected window — the most actionable
   // number for restock decisions, since low-stock alone doesn't say whether
@@ -2611,7 +2750,7 @@ function DashboardTab({ inventory, sales, settings }) {
     const counts = {};
     for (const s of rangeSales) {
       for (const item of s.items || []) {
-        if (!counts[item.id]) counts[item.id] = { name: item.name, qty: 0, revenue: 0 };
+        if (!counts[item.id]) counts[item.id] = { id: item.id, name: item.name, qty: 0, revenue: 0 };
         counts[item.id].qty += item.qty;
         counts[item.id].revenue += item.price * item.qty;
         const unit = Number(item.cost) > 0 ? Number(item.cost) : (costById.get(item.id) > 0 ? costById.get(item.id) : null);
@@ -2642,10 +2781,15 @@ function DashboardTab({ inventory, sales, settings }) {
           delta={fin.known ? pctChange(fin.profit, prevFin.profit) : null} deltaLabel={win.prevLabel}
           sub={!fin.known ? (fin.sales ? 'Add buying prices in Inventory' : 'excl. VAT, after buying cost') : `${fin.margin.toFixed(1)}% margin${fin.coverage < 0.99 ? ` · ${Math.round(fin.coverage * 100)}% of sales have a buying price` : ''}`} />
         <StatCard label={`Transactions ${range === 'today' ? 'today' : rangeLabel.toLowerCase()}`} value={rangeSales.length} delta={pctChange(rangeSales.length, prevSales.length)} deltaLabel={win.prevLabel} />
-        <StatCard label="Owed by customers" value={formatMoney(owedTotal, settings.currency)} accent={owedTotal ? 'var(--amber)' : undefined} sub="unpaid account sales, all time" />
+        <StatCard label="Owed by customers" value={formatMoney(owedTotal, settings.currency)} accent={owedTotal ? 'var(--amber)' : undefined} sub="unpaid account sales, all time"
+          onClick={() => go('accounts')} title="Open Accounts" />
         <StatCard label="Stock value" value={formatMoney(stockAtCost, settings.currency)} sub={`at cost · ${formatMoney(stockAtRetail, settings.currency)} at retail · ${inventory.length} products`} />
-        <StatCard label="Low stock alerts" value={lowStock.length} accent={lowStock.length ? 'var(--red)' : undefined} />
-        <StatCard label={`Expiring within ${EXPIRY_WINDOW_DAYS}d`} value={expiringSoon.length} accent={expiringSoon.length ? 'var(--red)' : undefined} />
+        <StatCard label="Low stock alerts" value={lowStock.length} accent={lowStock.length ? 'var(--red)' : undefined}
+          sub={lowStock.length ? `${lowStock.filter((p) => stockState(p) === 'out').length} sold out` : undefined}
+          onClick={() => go('inventory', { filter: 'reorder' })} title="Show these in Inventory" />
+        <StatCard label={`Expiring within ${EXPIRY_WINDOW_DAYS}d`} value={expiringSoon.length} accent={expiringSoon.length ? 'var(--red)' : undefined}
+          sub={expiredNow.length ? `${expiredNow.length} already expired` : undefined}
+          onClick={() => go('inventory', { filter: 'expiring' })} title="Show these in Inventory" />
       </div>
 
       <div className="pos-dash-columns" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
@@ -2656,58 +2800,113 @@ function DashboardTab({ inventory, sales, settings }) {
         </div>
       </div>
 
-      <div className="pos-dash-columns" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 20 }}>
-        <div>
-          <h3 className="pos-serif" style={{ fontSize: 15, fontWeight: 600, marginBottom: 10, display: 'flex', alignItems: 'center', gap: 6 }}>
-            <TrendingUp size={15} color="var(--pine)" /> Top sellers ({rangeLabel.toLowerCase()})
-          </h3>
-          {topSelling.length === 0 && <EmptyState icon={TrendingUp} title="No sales in this period yet" compact />}
-          {topSelling.map((item, i) => (
-            <div key={item.name + i} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, padding: '8px 0', borderBottom: '1px solid var(--border)' }}>
-              <span>{item.name}</span>
-              <span className="pos-mono" style={{ color: 'var(--muted)' }}>{item.qty} sold{item.profit != null ? ` · ${formatMoney(item.profit, settings.currency)} profit` : ''}</span>
-            </div>
-          ))}
-        </div>
-        <div>
-          <h3 className="pos-serif" style={{ fontSize: 15, fontWeight: 600, marginBottom: 10, display: 'flex', alignItems: 'center', gap: 6 }}>
-            <AlertTriangle size={15} color="var(--amber)" /> Needs reordering
-          </h3>
-          {lowStock.length === 0 && <p style={{ fontSize: 13, color: 'var(--muted)' }}>All stock levels are healthy.</p>}
-          {lowStock.map((p) => (
-            <div key={p.id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, padding: '8px 0', borderBottom: '1px solid var(--border)' }}>
-              <span>{p.name}</span>
-              <span className="pos-mono" style={{ color: p.stock === 0 ? 'var(--red)' : 'var(--amber)' }}>{p.stock} left (reorder at {p.reorderLevel})</span>
-            </div>
-          ))}
-        </div>
-        <div>
-          <h3 className="pos-serif" style={{ fontSize: 15, fontWeight: 600, marginBottom: 10, display: 'flex', alignItems: 'center', gap: 6 }}>
-            <AlertTriangle size={15} color="var(--red)" /> Expiring within {EXPIRY_WINDOW_DAYS} days
-          </h3>
-          {expiringSoon.length === 0 && <p style={{ fontSize: 13, color: 'var(--muted)' }}>Nothing in stock is close to expiry.</p>}
-          {expiringSoon.map((p) => {
-            const days = daysUntilExpiry(p.expiry);
+      <div className="pos-dash-columns" style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 20, alignItems: 'stretch' }}>
+        <DashPanel icon={AlertTriangle} tone="amber" title="Needs reordering" count={lowStock.length}
+          onAction={() => go('inventory', { filter: 'reorder' })} actionLabel="Inventory"
+          moreCount={lowStock.length - DASH_PANEL_ROWS} moreLabel="to reorder">
+          {lowStock.length === 0 && <EmptyState icon={CheckCircle} title="All stock levels are healthy" subtitle="Nothing is at or below its reorder level." compact />}
+          {lowStock.slice(0, DASH_PANEL_ROWS).map((p) => {
+            const out = stockState(p) === 'out';
+            const fill = Math.min(100, Math.round((Math.max(0, p.stock) / Math.max(1, p.reorderLevel)) * 100));
             return (
-              <div key={p.id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, padding: '8px 0', borderBottom: '1px solid var(--border)' }}>
-                <span>{p.name} <span style={{ color: 'var(--muted)', fontSize: 11 }}>({p.stock} in stock)</span></span>
-                <span className="pos-mono" style={{ color: days < 0 ? 'var(--red)' : 'var(--amber)' }}>{expiryLabel(days)}</span>
+              <button key={p.id} type="button" className="pos-row-btn" title="Open in Inventory to adjust stock" onClick={() => go('inventory', { query: p.name })}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div className="pos-ellipsis" style={{ fontWeight: 600 }}>{p.name}</div>
+                  <div className="pos-ellipsis" style={{ fontSize: 11.5, color: 'var(--muted)', marginTop: 1 }}>{p.category || 'Uncategorised'} · reorder at {p.reorderLevel}</div>
+                </div>
+                <span aria-hidden="true" style={{ width: 44, height: 5, borderRadius: 3, background: 'var(--border)', overflow: 'hidden', flexShrink: 0 }}>
+                  <span style={{ display: 'block', width: `${fill}%`, height: '100%', background: out ? 'var(--red)' : 'var(--amber)' }} />
+                </span>
+                <StatusPill tone={out ? 'red' : 'amber'} style={{ minWidth: 76, justifyContent: 'center' }}>{out ? 'Out of stock' : `${p.stock} left`}</StatusPill>
+              </button>
+            );
+          })}
+        </DashPanel>
+
+        <DashPanel icon={Clock} tone="red" title={`Expiring within ${EXPIRY_WINDOW_DAYS} days`} count={expiringSoon.length}
+          onAction={() => go('inventory', { filter: 'expiring' })} actionLabel="Inventory"
+          moreCount={expiringSoon.length - DASH_PANEL_ROWS} moreLabel="with expiry alerts">
+          {expiringSoon.length === 0 && <EmptyState icon={CheckCircle} title="Nothing in stock is close to expiry" compact />}
+          {[
+            { key: 'expired', label: `Already expired · ${expiredNow.length}${expiredAtCost > 0 ? ` · ${formatMoney(expiredAtCost, settings.currency)} at cost` : ''}`, color: 'var(--red)' },
+            { key: 'soon', label: `Expiring soon · ${expiringSoon.length - expiredNow.length}`, color: PILL_TONES.amber.color },
+          ].map((group) => {
+            const rows = expiringSoon.slice(0, DASH_PANEL_ROWS).filter((p) => expiryState(p) === group.key);
+            if (rows.length === 0) return null;
+            return (
+              <React.Fragment key={group.key}>
+                <div className="pos-panel-sub" style={{ color: group.color }}>{group.label}</div>
+                {rows.map((p) => {
+                  const days = daysUntilExpiry(p.expiry);
+                  return (
+                    <button key={p.id} type="button" className="pos-row-btn" title="Open in Inventory" onClick={() => go('inventory', { query: p.name })}>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div className="pos-ellipsis" style={{ fontWeight: 600 }}>{p.name}</div>
+                        <div className="pos-ellipsis" style={{ fontSize: 11.5, color: 'var(--muted)', marginTop: 1 }}>{p.stock} in stock · {formatShortDate(p.expiry)}</div>
+                      </div>
+                      <StatusPill tone={days < 0 ? 'red' : 'amber'}>{days < 0 ? `${Math.abs(days)}d ago` : days === 0 ? 'Today' : `in ${days}d`}</StatusPill>
+                    </button>
+                  );
+                })}
+              </React.Fragment>
+            );
+          })}
+        </DashPanel>
+
+        <DashPanel icon={TrendingUp} tone="green" title={`Top sellers · ${rangeLabel.toLowerCase()}`}
+          onAction={() => go('sales')} actionLabel="Sales history">
+          {topSelling.length === 0 && <EmptyState icon={TrendingUp} title="No sales in this period yet" subtitle="Your best sellers will show up here." compact />}
+          {topSelling.slice(0, DASH_PANEL_ROWS).map((item, i) => (
+            <button key={item.id} type="button" className="pos-row-btn" title="Open in Inventory" onClick={() => go('inventory', { query: item.name })}>
+              <span aria-hidden="true" className="pos-mono" style={{
+                width: 24, height: 24, borderRadius: '50%', flexShrink: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                fontSize: 11.5, fontWeight: 600, background: i === 0 ? 'var(--pine)' : 'var(--pine-pale)', color: i === 0 ? '#fff' : 'var(--pine)'
+              }}>{i + 1}</span>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div className="pos-ellipsis" style={{ fontWeight: 600 }}>{item.name}</div>
+                <div aria-hidden="true" style={{ height: 4, borderRadius: 2, background: 'var(--bg)', marginTop: 6, overflow: 'hidden' }}>
+                  <div style={{ width: `${Math.max(4, (item.qty / topSelling[0].qty) * 100)}%`, height: '100%', background: 'var(--pine-light)', borderRadius: 2 }} />
+                </div>
+              </div>
+              <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                <div className="pos-mono" style={{ fontWeight: 600 }}>{item.qty} sold</div>
+                <div style={{ fontSize: 11.5, color: 'var(--muted)', marginTop: 1 }}>
+                  {formatMoney(item.revenue, settings.currency)}{item.profit != null ? ` · ${formatMoney(item.profit, settings.currency)} profit` : ''}
+                </div>
+              </div>
+            </button>
+          ))}
+        </DashPanel>
+
+        <DashPanel icon={Receipt} tone="green" title="Recent transactions" onAction={() => go('sales')} actionLabel="View all">
+          {recent.length === 0 && <EmptyState icon={Receipt} title="No sales recorded yet" subtitle="Each sale appears here as it's rung up." compact />}
+          {recent.map((s) => {
+            const meta = PAYMENT_METHOD_META[s.paymentMethod] || { label: s.paymentMethod || 'Sale', Icon: Receipt };
+            const units = (s.items || []).reduce((sum, i) => sum + (Number(i.qty) || 0), 0);
+            const unpaid = s.paymentMethod === 'account' && !s.settled && !s.voided;
+            return (
+              <div key={s.id} className="pos-row" style={{ opacity: s.voided ? 0.6 : 1 }}>
+                <span aria-hidden="true" style={{
+                  width: 32, height: 32, borderRadius: '50%', flexShrink: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                  background: 'var(--pine-pale)', color: 'var(--pine)'
+                }}><meta.Icon size={15} /></span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div className="pos-ellipsis" style={{ fontWeight: 600, textDecoration: s.voided ? 'line-through' : 'none' }}>
+                    {s.cashier || 'Unknown'}{s.customerName ? ` → ${s.customerName}` : ''}
+                  </div>
+                  <div className="pos-ellipsis" style={{ fontSize: 11.5, color: 'var(--muted)', marginTop: 1 }}>
+                    {units > 0 ? `${units} item${units !== 1 ? 's' : ''} · ` : ''}{meta.label} · {formatWhen(s.timestamp)}
+                  </div>
+                </div>
+                <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                  <div className="pos-mono" style={{ fontWeight: 600, textDecoration: s.voided ? 'line-through' : 'none' }}>{formatMoney(s.total, settings.currency)}</div>
+                  {s.voided && <StatusPill tone="grey" style={{ marginTop: 3 }}>Voided</StatusPill>}
+                  {unpaid && <StatusPill tone="amber" style={{ marginTop: 3 }}>Unpaid</StatusPill>}
+                </div>
               </div>
             );
           })}
-        </div>
-        <div>
-          <h3 className="pos-serif" style={{ fontSize: 15, fontWeight: 600, marginBottom: 10, display: 'flex', alignItems: 'center', gap: 6 }}>
-            <Receipt size={15} /> Recent transactions
-          </h3>
-          {recent.length === 0 && <EmptyState icon={Receipt} title="No sales recorded yet" compact />}
-          {recent.map((s) => (
-            <div key={s.id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, padding: '8px 0', borderBottom: '1px solid var(--border)' }}>
-              <span style={{ textDecoration: s.voided ? 'line-through' : 'none', color: s.voided ? 'var(--muted)' : 'var(--ink)' }}>{s.cashier} · {new Date(s.timestamp).toLocaleTimeString()}</span>
-              <span className="pos-mono" style={{ color: s.voided ? 'var(--muted)' : 'var(--ink)' }}>{s.voided ? 'Voided' : formatMoney(s.total, settings.currency)}</span>
-            </div>
-          ))}
-        </div>
+        </DashPanel>
       </div>
     </div>
   );
@@ -2755,48 +2954,226 @@ function ConfirmModal({ title, message, confirmLabel = 'Delete', onConfirm, onCa
   );
 }
 
-function InventoryTab({ inventory, settings, saveInventory, user, logInventoryChange }) {
+/* ---------------------------------------------------------------------- */
+/* Inventory tab                                                           */
+/* ---------------------------------------------------------------------- */
+
+const INV_FILTERS = [
+  { key: 'all', label: 'All' },
+  { key: 'reorder', label: 'Needs reorder', warn: true },
+  { key: 'out', label: 'Out of stock', warn: true },
+  { key: 'expiring', label: 'Expiring', warn: true },
+];
+const INV_SORTS = [
+  ['', 'Default order'], ['name', 'Name'], ['category', 'Category'], ['stock', 'Stock'],
+  ['price', 'Price'], ['expiry', 'Expiry'], ['sku', 'SKU'],
+];
+const INV_PAGE = 60;
+const INV_GRID = '28px minmax(180px, 2.4fr) minmax(96px, 0.8fr) minmax(104px, 0.9fr) 172px 96px 120px 96px';
+
+function matchesInvFilter(p, key) {
+  if (key === 'reorder') return stockState(p) !== 'ok';
+  if (key === 'out') return stockState(p) === 'out';
+  if (key === 'expiring') return expiryState(p) !== null;
+  return true;
+}
+
+// With no column chosen, the list is ordered by what the current filter is
+// about: emptiest first for restocking, soonest-expired first for expiry.
+function defaultInvCompare(filter) {
+  const fill = (p) => (p.stock <= 0 ? -1 : p.stock / Math.max(1, p.reorderLevel));
+  if (filter === 'reorder' || filter === 'out') return (a, b) => fill(a) - fill(b) || a.name.localeCompare(b.name);
+  if (filter === 'expiring') return (a, b) => daysUntilExpiry(a.expiry) - daysUntilExpiry(b.expiry);
+  return null;
+}
+
+function InvSortHeader({ label, sortKey, sort, onSort }) {
+  const active = sort.key === sortKey;
+  return (
+    <button type="button" onClick={() => onSort(sortKey)} style={{
+      background: 'none', border: 'none', padding: 0, display: 'flex', alignItems: 'center', gap: 3,
+      fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5,
+      color: active ? 'var(--ink)' : 'var(--muted)', fontWeight: active ? 700 : 500
+    }}>
+      {label}
+      {active && <span style={{ fontSize: 9 }}>{sort.dir === 'asc' ? '▲' : '▼'}</span>}
+    </button>
+  );
+}
+
+// − [ n ] + with ✓ / ✕ once the number differs from what's saved. Defined at
+// module level on purpose: an input declared inside a component that
+// re-renders would be re-created on every keystroke and lose focus.
+function StockStepper({ product: p, draft, busy, onBump, onType, onCommit, onCancel }) {
+  const stock = Number(p.stock) || 0;
+  const hasDraft = draft !== undefined;
+  const parsed = hasDraft ? parseInt(draft, 10) : stock;
+  const valid = !Number.isNaN(parsed) && parsed >= 0;
+  const dirty = hasDraft && (!valid || parsed !== stock);
+  const canSave = hasDraft && valid && parsed !== stock;
+  const preview = stockState({ ...p, stock: valid ? parsed : stock });
+  const tint = preview === 'out' ? 'var(--red)' : preview === 'low' ? PILL_TONES.amber.color : 'var(--ink)';
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+      <div className={`pos-stepper${dirty ? ' dirty' : ''}`}>
+        <button type="button" aria-label={`Remove one from ${p.name}`} disabled={busy || (valid && parsed <= 0)} onClick={() => onBump(-1)}><Minus size={13} /></button>
+        <input inputMode="numeric" aria-label={`Stock of ${p.name}`} title={`Reorder at ${p.reorderLevel}. Type a number, then press Enter to save.`}
+          value={hasDraft ? draft : String(stock)} disabled={busy} style={{ color: tint }}
+          onFocus={(e) => e.target.select()}
+          onChange={(e) => onType(e.target.value.replace(/[^0-9]/g, ''))}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') { e.preventDefault(); onCommit(); }
+            else if (e.key === 'Escape') onCancel();
+            else if (e.key === 'ArrowUp') { e.preventDefault(); onBump(1); }
+            else if (e.key === 'ArrowDown') { e.preventDefault(); onBump(-1); }
+          }} />
+        <button type="button" aria-label={`Add one to ${p.name}`} disabled={busy} onClick={() => onBump(1)}><Plus size={13} /></button>
+      </div>
+      {dirty && (
+        <>
+          <button type="button" className="pos-mini-btn ok" title="Save new stock" aria-label="Save new stock" disabled={busy || !canSave} onClick={onCommit}><Check size={14} /></button>
+          <button type="button" className="pos-mini-btn" title="Undo" aria-label="Undo stock change" disabled={busy} onClick={onCancel}><X size={14} /></button>
+        </>
+      )}
+    </div>
+  );
+}
+
+function InvStatusPill({ p }) {
+  const s = stockState(p);
+  if (s === 'out') return <StatusPill tone="red">Out of stock</StatusPill>;
+  if (s === 'low') return <StatusPill tone="amber" title={`At or below the reorder level of ${p.reorderLevel}`}>Low stock</StatusPill>;
+  return <StatusPill tone="green">In stock</StatusPill>;
+}
+
+function InvExpiry({ p }) {
+  const state = expiryState(p);
+  return (
+    <div style={{ minWidth: 0 }}>
+      <div style={{ fontSize: 12.5, color: state ? 'var(--ink)' : 'var(--muted)', fontWeight: state ? 600 : 400 }}>{formatShortDate(p.expiry)}</div>
+      {state && <StatusPill tone={state === 'expired' ? 'red' : 'amber'} style={{ marginTop: 3 }}>{expiryLabel(daysUntilExpiry(p.expiry))}</StatusPill>}
+    </div>
+  );
+}
+
+function InvNameCell({ p }) {
+  return (
+    <div style={{ minWidth: 0 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+        <span className="pos-ellipsis" title={p.name} style={{ fontWeight: 600, fontSize: 13.5 }}>{p.name}</span>
+        {p.requiresRx && <StatusPill tone="green" title="Prescription only" style={{ padding: '0 6px', fontSize: 10.5 }}>Rx</StatusPill>}
+      </div>
+      <div className="pos-ellipsis" style={{ fontSize: 11.5, color: 'var(--muted)', marginTop: 1 }}>
+        {p.category || 'Uncategorised'}{p.sku ? <> · <span className="pos-mono">{p.sku}</span></> : null}
+      </div>
+    </div>
+  );
+}
+
+function InvPrice({ p, settings, align }) {
+  const margin = p.cost > 0 && p.price > 0 ? Math.round(((p.price - p.cost) / p.price) * 100) : null;
+  return (
+    <div style={{ textAlign: align || 'left' }}>
+      <div className="pos-mono" style={{ fontWeight: 500, whiteSpace: 'nowrap' }}>{formatMoney(p.price, settings.currency)}</div>
+      {margin !== null && <div style={{ fontSize: 11, marginTop: 1, color: margin < 0 ? 'var(--red)' : 'var(--muted)' }} title={`Buying price ${formatMoney(p.cost, settings.currency)}`}>{margin}% margin</div>}
+    </div>
+  );
+}
+
+function InventoryTab({ inventory, settings, saveInventory, user, logInventoryChange, initialFilter, initialQuery }) {
+  const isCompact = useMediaQuery('(max-width: 860px)');
   const [modalProduct, setModalProduct] = useState(null); // null = closed, {} = new, obj = edit
   const [drugInfoProduct, setDrugInfoProduct] = useState(null);
-  const [query, setQuery] = useState('');
+  const [query, setQuery] = useState(initialQuery || '');
+  const [statusFilter, setStatusFilter] = useState(INV_FILTERS.some((f) => f.key === initialFilter) ? initialFilter : 'all');
+  const [categoryFilter, setCategoryFilter] = useState('all');
+  const [rxOnly, setRxOnly] = useState(false);
   const [confirmDeleteId, setConfirmDeleteId] = useState(null);
   const [sort, setSort] = useState({ key: null, dir: 'asc' });
   const [selectedIds, setSelectedIds] = useState(() => new Set());
   const [bulkModalOpen, setBulkModalOpen] = useState(false);
-  const [saveError, setSaveError] = useState('');
-  const [saving, setSaving] = useState(false);
+  const [drafts, setDrafts] = useState({}); // product id -> typed stock number, until saved or undone
+  const [busyIds, setBusyIds] = useState(() => new Set());
+  const [notice, setNotice] = useState(null); // { kind: 'ok' | 'error', text }
+  const [shown, setShown] = useState(INV_PAGE);
 
-  const filtered = inventory.filter((p) => p.name.toLowerCase().includes(query.toLowerCase()) || p.sku.toLowerCase().includes(query.toLowerCase()));
+  useEffect(() => { setShown(INV_PAGE); }, [query, statusFilter, categoryFilter, rxOnly, sort.key, sort.dir]);
+  useEffect(() => {
+    if (!notice) return undefined;
+    const t = setTimeout(() => setNotice(null), notice.kind === 'error' ? 9000 : 3000);
+    return () => clearTimeout(t);
+  }, [notice]);
+
+  const counts = useMemo(() => {
+    let reorder = 0, out = 0, expiring = 0;
+    for (const p of inventory) {
+      const s = stockState(p);
+      if (s !== 'ok') reorder++;
+      if (s === 'out') out++;
+      if (expiryState(p)) expiring++;
+    }
+    return { all: inventory.length, reorder, out, expiring };
+  }, [inventory]);
+
+  const categories = useMemo(
+    () => Array.from(new Set(inventory.map((p) => p.category).filter(Boolean))).sort((a, b) => a.localeCompare(b)),
+    [inventory]
+  );
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return inventory.filter((p) => {
+      if (q && !`${p.name} ${p.sku || ''} ${p.category || ''}`.toLowerCase().includes(q)) return false;
+      if (categoryFilter !== 'all' && p.category !== categoryFilter) return false;
+      if (rxOnly && !p.requiresRx) return false;
+      return matchesInvFilter(p, statusFilter);
+    });
+  }, [inventory, query, statusFilter, categoryFilter, rxOnly]);
 
   const sorted = useMemo(() => {
-    if (!sort.key) return filtered;
+    if (!sort.key) {
+      const byFilter = defaultInvCompare(statusFilter);
+      return byFilter ? [...filtered].sort(byFilter) : filtered;
+    }
     const dir = sort.dir === 'asc' ? 1 : -1;
     return [...filtered].sort((a, b) => {
-      let av, bv;
       if (sort.key === 'expiry') {
-        av = a.expiry ? new Date(a.expiry).getTime() : Infinity;
-        bv = b.expiry ? new Date(b.expiry).getTime() : Infinity;
-      } else if (sort.key === 'price' || sort.key === 'cost' || sort.key === 'stock') {
-        av = Number(a[sort.key]); bv = Number(b[sort.key]);
-      } else {
-        av = String(a[sort.key] || '').toLowerCase();
-        bv = String(b[sort.key] || '').toLowerCase();
+        const ae = a.expiry ? new Date(a.expiry).getTime() : NaN;
+        const be = b.expiry ? new Date(b.expiry).getTime() : NaN;
+        if (Number.isNaN(ae) || Number.isNaN(be)) return Number.isNaN(ae) === Number.isNaN(be) ? 0 : Number.isNaN(ae) ? 1 : -1; // undated always last
+        return (ae - be) * dir;
       }
-      if (av < bv) return -1 * dir;
-      if (av > bv) return 1 * dir;
-      return 0;
+      if (sort.key === 'price' || sort.key === 'cost' || sort.key === 'stock') return ((Number(a[sort.key]) || 0) - (Number(b[sort.key]) || 0)) * dir;
+      return String(a[sort.key] || '').localeCompare(String(b[sort.key] || ''), undefined, { numeric: true, sensitivity: 'base' }) * dir;
     });
-  }, [filtered, sort]);
+  }, [filtered, sort, statusFilter]);
+
+  const visible = sorted.slice(0, shown);
+  const filtersActive = query.trim() !== '' || statusFilter !== 'all' || categoryFilter !== 'all' || rxOnly;
+  const clearFilters = () => { setQuery(''); setStatusFilter('all'); setCategoryFilter('all'); setRxOnly(false); };
 
   const toggleSort = (key) => {
     setSort((s) => (s.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'asc' }));
   };
 
-  const upsert = (product) => {
+  // Saves, and — unlike before — says so when the server refuses (a clashing
+  // SKU, say). saveInventory has already put the old values back by then.
+  const persist = async (next, failPrefix) => {
+    let res;
+    try { res = await saveInventory(next); } catch (e) { res = { ok: false, errors: [e && e.message] }; }
+    if (res && res.ok === false) {
+      setNotice({ kind: 'error', text: `${failPrefix} ${(res.errors && res.errors[0]) || 'The change was refused and has been undone.'}` });
+      return false;
+    }
+    return true;
+  };
+
+  const upsert = async (product) => {
+    setModalProduct(null);
     if (product.id) {
       const before = inventory.find((p) => p.id === product.id);
-      saveInventory(inventory.map((p) => (p.id === product.id ? product : p)));
-      if (logInventoryChange && before) {
+      const ok = await persist(inventory.map((p) => (p.id === product.id ? product : p)), `Couldn't save "${product.name}".`);
+      if (ok && logInventoryChange && before) {
         logInventoryChange({
           action: 'edit',
           productName: product.name,
@@ -2807,8 +3184,8 @@ function InventoryTab({ inventory, settings, saveInventory, user, logInventoryCh
       }
     } else {
       const created = { ...product, id: genId('p') };
-      saveInventory([...inventory, created]);
-      if (logInventoryChange) {
+      const ok = await persist([...inventory, created], `Couldn't add "${product.name}".`);
+      if (ok && logInventoryChange) {
         logInventoryChange({
           action: 'add',
           productName: created.name,
@@ -2818,13 +3195,13 @@ function InventoryTab({ inventory, settings, saveInventory, user, logInventoryCh
         });
       }
     }
-    setModalProduct(null);
   };
 
-  const remove = (id) => {
+  const remove = async (id) => {
     const product = inventory.find((p) => p.id === id);
-    saveInventory(inventory.filter((p) => p.id !== id));
-    if (logInventoryChange && product) {
+    setSelectedIds((s) => { const next = new Set(s); next.delete(id); return next; });
+    const ok = await persist(inventory.filter((p) => p.id !== id), `Couldn't delete "${product ? product.name : 'that product'}".`);
+    if (ok && logInventoryChange && product) {
       logInventoryChange({
         action: 'delete',
         productName: product.name,
@@ -2833,7 +3210,6 @@ function InventoryTab({ inventory, settings, saveInventory, user, logInventoryCh
         before: productSnap(product), refId: product.id,
       });
     }
-    setSelectedIds((s) => { const next = new Set(s); next.delete(id); return next; });
   };
 
   const toggleSelected = (id) => {
@@ -2847,21 +3223,19 @@ function InventoryTab({ inventory, settings, saveInventory, user, logInventoryCh
   const allVisibleSelected = sorted.length > 0 && sorted.every((p) => selectedIds.has(p.id));
   const toggleSelectAll = () => {
     setSelectedIds((s) => {
-      if (allVisibleSelected) {
-        const next = new Set(s);
-        sorted.forEach((p) => next.delete(p.id));
-        return next;
-      }
       const next = new Set(s);
-      sorted.forEach((p) => next.add(p.id));
+      if (allVisibleSelected) sorted.forEach((p) => next.delete(p.id));
+      else sorted.forEach((p) => next.add(p.id));
       return next;
     });
   };
 
-  const applyBulkEdit = (updatedProducts, detailLabel) => {
+  const applyBulkEdit = async (updatedProducts, detailLabel) => {
     const byId = new Map(updatedProducts.map((p) => [p.id, p]));
-    saveInventory(inventory.map((p) => (byId.has(p.id) ? byId.get(p.id) : p)));
-    if (logInventoryChange) {
+    setSelectedIds(new Set());
+    setBulkModalOpen(false);
+    const ok = await persist(inventory.map((p) => (byId.has(p.id) ? byId.get(p.id) : p)), 'Bulk edit failed.');
+    if (ok && logInventoryChange) {
       logInventoryChange({
         action: 'bulk',
         productName: `${updatedProducts.length} product${updatedProducts.length !== 1 ? 's' : ''}`,
@@ -2869,88 +3243,219 @@ function InventoryTab({ inventory, settings, saveInventory, user, logInventoryCh
         detail: detailLabel,
       });
     }
-    setSelectedIds(new Set());
-    setBulkModalOpen(false);
   };
 
-  const SortHeader = ({ label, sortKey }) => (
-    <button onClick={() => toggleSort(sortKey)} style={{
-      background: 'none', border: 'none', padding: 0, display: 'flex', alignItems: 'center', gap: 3,
-      fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5,
-      color: sort.key === sortKey ? 'var(--ink)' : 'var(--muted)', fontWeight: sort.key === sortKey ? 700 : 400
-    }}>
-      {label}
-      {sort.key === sortKey && <span style={{ fontSize: 10 }}>{sort.dir === 'asc' ? '▲' : '▼'}</span>}
-    </button>
+  /* Quick stock adjust: − / + / type a number, then ✓ (or Enter). One save and
+     one activity-log entry per change, however many times − or + was tapped. */
+  const bumpStock = (p, delta) => setDrafts((d) => {
+    const typed = d[p.id] !== undefined ? parseInt(d[p.id], 10) : NaN;
+    const base = Number.isNaN(typed) ? (Number(p.stock) || 0) : typed;
+    const next = Math.max(0, base + delta);
+    const nd = { ...d };
+    if (next === (Number(p.stock) || 0)) delete nd[p.id]; else nd[p.id] = String(next);
+    return nd;
+  });
+  const typeStock = (p, value) => setDrafts((d) => {
+    const nd = { ...d };
+    if (value === String(Number(p.stock) || 0)) delete nd[p.id]; else nd[p.id] = value;
+    return nd;
+  });
+  const cancelStock = (p) => setDrafts((d) => { const nd = { ...d }; delete nd[p.id]; return nd; });
+  const commitStock = async (p) => {
+    const next = parseInt(drafts[p.id], 10);
+    const current = inventory.find((x) => x.id === p.id) || p;
+    if (Number.isNaN(next) || next < 0 || next === Number(current.stock)) return;
+    const before = productSnap(current);
+    const updated = { ...current, stock: next };
+    setBusyIds((s) => new Set(s).add(p.id));
+    const ok = await persist(inventory.map((x) => (x.id === p.id ? updated : x)), `Couldn't update stock for "${p.name}".`);
+    setBusyIds((s) => { const n = new Set(s); n.delete(p.id); return n; });
+    cancelStock(p);
+    if (ok) {
+      setNotice({ kind: 'ok', text: `${p.name}: stock ${before.stock} → ${next}` });
+      if (logInventoryChange) {
+        logInventoryChange({
+          action: 'edit',
+          productName: p.name,
+          sku: p.sku,
+          detail: `Stock ${before.stock} → ${next} (quick adjust)`,
+          before, after: productSnap(updated), refId: p.id,
+        });
+      }
+    }
+  };
+
+  const stepperFor = (p) => (
+    <StockStepper product={p} draft={drafts[p.id]} busy={busyIds.has(p.id)}
+      onBump={(d) => bumpStock(p, d)} onType={(v) => typeStock(p, v)} onCommit={() => commitStock(p)} onCancel={() => cancelStock(p)} />
   );
+  const actionsFor = (p) => (
+    <span style={{ display: 'flex', gap: 2, justifyContent: 'flex-end' }}>
+      <button className="pos-icon-btn" onClick={() => setDrugInfoProduct(p)} title="AI dosage / side effects / interactions lookup" aria-label={`Drug info for ${p.name}`} style={{ color: 'var(--pine)' }}><Info size={14} /></button>
+      <button className="pos-icon-btn" onClick={() => setModalProduct(p)} title="Edit product" aria-label={`Edit ${p.name}`} style={{ color: 'var(--muted)' }}><Edit2 size={14} /></button>
+      <button className="pos-icon-btn pos-icon-btn-danger" onClick={() => setConfirmDeleteId(p.id)} title="Delete product" aria-label={`Delete ${p.name}`} style={{ color: 'var(--red)' }}><Trash2 size={14} /></button>
+    </span>
+  );
+
+  const subtitleParts = [`${inventory.length} product${inventory.length !== 1 ? 's' : ''}`];
+  if (counts.reorder) subtitleParts.push(`${counts.reorder} need restocking`);
+  if (counts.expiring) subtitleParts.push(`${counts.expiring} with expiry alerts`);
 
   return (
     <div>
-      <div className="pos-inv-toolbar" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-        <h2 className="pos-serif" style={{ fontSize: 20, fontWeight: 700 }}>Inventory</h2>
-        <button onClick={() => setModalProduct({ ...emptyProduct })} style={{ background: 'var(--pine)', color: '#fff', border: 'none', borderRadius: 8, padding: '9px 16px', fontSize: 13, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6, justifyContent: 'center' }}>
-          <Plus size={14} /> Add product
-        </button>
-      </div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 14 }}>
-        <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search inventory"
-          style={{ flex: '1 1 240px', maxWidth: 320, padding: '9px 12px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 13 }} />
-        {selectedIds.size > 0 && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: 'var(--pine-pale)', border: '1px solid var(--pine)', borderRadius: 8, padding: '7px 12px' }}>
-            <span style={{ fontSize: 12.5, color: 'var(--pine)', fontWeight: 600 }}>{selectedIds.size} selected</span>
-            <button onClick={() => setBulkModalOpen(true)} style={{ background: 'var(--pine)', color: '#fff', border: 'none', borderRadius: 6, padding: '5px 10px', fontSize: 12, fontWeight: 600 }}>
-              Bulk edit
-            </button>
-            <button onClick={() => setSelectedIds(new Set())} style={{ background: 'none', border: 'none', color: 'var(--pine)', fontSize: 12, textDecoration: 'underline' }}>
-              Clear
-            </button>
-          </div>
-        )}
-      </div>
+      <PageHeader
+        title="Inventory"
+        subtitle={subtitleParts.join(' · ')}
+        right={
+          <button onClick={() => setModalProduct({ ...emptyProduct })} style={{ background: 'var(--pine)', color: '#fff', border: 'none', borderRadius: 8, padding: '9px 16px', fontSize: 13, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6, justifyContent: 'center' }}>
+            <Plus size={14} /> Add product
+          </button>
+        }
+      />
 
-      <div className="pos-table-scroll" style={{ background: 'var(--paper)', border: '1px solid var(--border)', borderRadius: 12 }}>
-        <div style={{ minWidth: 780 }}>
-          <div style={{ display: 'grid', gridTemplateColumns: '30px 2fr 1.2fr 1fr 0.8fr 0.8fr 0.8fr 1fr 116px', padding: '10px 16px', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5, color: 'var(--muted)', borderBottom: '1px solid var(--border)', alignItems: 'center' }}>
-            <input type="checkbox" checked={allVisibleSelected} onChange={toggleSelectAll} />
-            <SortHeader label="Product" sortKey="name" />
-            <SortHeader label="Category" sortKey="category" />
-            <SortHeader label="SKU" sortKey="sku" />
-            <SortHeader label="Cost" sortKey="cost" />
-            <SortHeader label="Price" sortKey="price" />
-            <SortHeader label="Stock" sortKey="stock" />
-            <SortHeader label="Expiry" sortKey="expiry" />
-            <span></span>
-          </div>
-          {sorted.map((p) => {
-            const expDays = daysUntilExpiry(p.expiry);
-            const expiringSoon = expDays !== null && expDays <= EXPIRY_WINDOW_DAYS;
-            return (
-            <div key={p.id} style={{ display: 'grid', gridTemplateColumns: '30px 2fr 1.2fr 1fr 0.8fr 0.8fr 0.8fr 1fr 116px', padding: '10px 16px', fontSize: 13, borderBottom: '1px solid var(--border)', alignItems: 'center', background: selectedIds.has(p.id) ? 'var(--pine-pale)' : 'transparent' }}>
-              <input type="checkbox" checked={selectedIds.has(p.id)} onChange={() => toggleSelected(p.id)} />
-              <span>{p.name}{p.requiresRx ? ' ℞' : ''}</span>
-              <span style={{ color: 'var(--muted)' }}>{p.category}</span>
-              <span className="pos-mono" style={{ fontSize: 12 }}>{p.sku}</span>
-              <span className="pos-mono" style={{ color: 'var(--muted)' }} title={p.cost > 0 && p.price > 0 ? `Margin ${(((p.price - p.cost) / p.price) * 100).toFixed(0)}%` : 'No buying price set'}>{p.cost > 0 ? formatMoney(p.cost, settings.currency) : '—'}</span>
-              <span className="pos-mono">{formatMoney(p.price, settings.currency)}</span>
-              <span style={{ color: p.stock <= p.reorderLevel ? 'var(--red)' : 'var(--ink)' }}>{p.stock}</span>
-              <span style={{ color: expiringSoon ? (expDays < 0 ? 'var(--red)' : 'var(--amber)') : 'var(--muted)', fontSize: 12, fontWeight: expiringSoon ? 600 : 400 }} title={expiringSoon ? expiryLabel(expDays) : ''}>{p.expiry}</span>
-              <span style={{ display: 'flex', gap: 6 }}>
-                <button className="pos-icon-btn" onClick={() => setDrugInfoProduct(p)} title="AI dosage / side effects / interactions lookup" style={{ color: 'var(--pine)' }}><Info size={14} /></button>
-                <button className="pos-icon-btn" onClick={() => setModalProduct(p)} title="Edit product" style={{ color: 'var(--muted)' }}><Edit2 size={14} /></button>
-                <button className="pos-icon-btn pos-icon-btn-danger" onClick={() => setConfirmDeleteId(p.id)} title="Delete product" style={{ color: 'var(--red)' }}><Trash2 size={14} /></button>
-              </span>
-            </div>
-            );
-          })}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 10 }}>
+        <div style={{ position: 'relative', flex: '1 1 240px', maxWidth: 380 }}>
+          <Search size={14} style={{ position: 'absolute', left: 11, top: '50%', transform: 'translateY(-50%)', color: 'var(--muted)', pointerEvents: 'none' }} />
+          <input className="pos-field" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search name, SKU or category"
+            style={{ width: '100%', paddingLeft: 32, paddingRight: query ? 34 : 10 }} />
+          {query && (
+            <button className="pos-icon-btn" onClick={() => setQuery('')} title="Clear search" aria-label="Clear search"
+              style={{ position: 'absolute', right: 2, top: '50%', transform: 'translateY(-50%)', color: 'var(--muted)' }}><X size={13} /></button>
+          )}
+        </div>
+        <select className="pos-field" value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)} aria-label="Filter by category" style={{ flex: '1 1 140px', minWidth: 0, maxWidth: isCompact ? 'none' : 200 }}>
+          <option value="all">All categories</option>
+          {categories.map((c) => <option key={c} value={c}>{c}</option>)}
+        </select>
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center', flex: '1 1 160px', minWidth: 0, maxWidth: isCompact ? 'none' : 230 }}>
+          <select className="pos-field" value={sort.key || ''} aria-label="Sort by" style={{ flex: 1, minWidth: 0 }}
+            onChange={(e) => setSort((s) => ({ key: e.target.value || null, dir: s.dir }))}>
+            {INV_SORTS.map(([k, l]) => <option key={k} value={k}>{k ? `Sort: ${l}` : 'Sort: default'}</option>)}
+          </select>
+          <button type="button" className="pos-mini-btn" disabled={!sort.key} style={{ width: 36, height: 36 }}
+            title={sort.dir === 'asc' ? 'Ascending — tap for descending' : 'Descending — tap for ascending'}
+            onClick={() => setSort((s) => ({ ...s, dir: s.dir === 'asc' ? 'desc' : 'asc' }))}>
+            {sort.dir === 'asc' ? '▲' : '▼'}
+          </button>
         </div>
       </div>
+
+      <div className="pos-chip-row" style={{ marginBottom: 14, alignItems: 'center' }}>
+        {INV_FILTERS.map((f) => (
+          <button key={f.key} type="button" aria-pressed={statusFilter === f.key} className={`pos-chip${statusFilter === f.key ? ' on' : ''}`} onClick={() => setStatusFilter(f.key)}>
+            {f.label}<span className={`pos-chip-n${f.warn && counts[f.key] > 0 ? ' warn' : ''}`}>{counts[f.key]}</span>
+          </button>
+        ))}
+        <span aria-hidden="true" style={{ width: 1, alignSelf: 'stretch', background: 'var(--border)', margin: '2px 2px', flexShrink: 0 }} />
+        <button type="button" aria-pressed={rxOnly} className={`pos-chip${rxOnly ? ' on' : ''}`} onClick={() => setRxOnly((v) => !v)}>Rx only</button>
+        {filtersActive && <button type="button" className="pos-link-btn" onClick={clearFilters} style={{ flexShrink: 0 }}>Clear filters</button>}
+      </div>
+
+      {selectedIds.size > 0 && (
+        <div style={{
+          position: 'sticky', top: 0, zIndex: 5, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 12,
+          background: 'var(--pine-pale)', border: '1px solid var(--pine)', borderRadius: 10, padding: '8px 12px'
+        }}>
+          <span style={{ fontSize: 12.5, color: 'var(--pine)', fontWeight: 700 }}>{selectedIds.size} selected</span>
+          <button onClick={() => setBulkModalOpen(true)} style={{ background: 'var(--pine)', color: '#fff', border: 'none', borderRadius: 6, padding: '6px 12px', fontSize: 12.5, fontWeight: 600 }}>Bulk edit</button>
+          <button onClick={() => setSelectedIds(new Set())} style={{ background: 'none', border: 'none', color: 'var(--pine)', fontSize: 12.5, textDecoration: 'underline' }}>Clear selection</button>
+        </div>
+      )}
+
+      {sorted.length === 0 ? (
+        <div style={{ background: 'var(--paper)', border: '1px solid var(--border)', borderRadius: 12 }}>
+          <EmptyState icon={Package}
+            title={inventory.length === 0 ? 'No products yet' : 'No products match these filters'}
+            subtitle={inventory.length === 0 ? 'Add your first product to start tracking stock.' : 'Try a different search, or clear the filters.'} />
+          {filtersActive && inventory.length > 0 && (
+            <div style={{ display: 'flex', justifyContent: 'center', paddingBottom: 22 }}>
+              <button type="button" className="pos-chip" onClick={clearFilters}>Clear filters</button>
+            </div>
+          )}
+        </div>
+      ) : isCompact ? (
+        <div>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, color: 'var(--muted)', margin: '0 2px 10px' }}>
+            <input type="checkbox" checked={allVisibleSelected} onChange={toggleSelectAll} style={{ width: 18, height: 18 }} /> Select all {sorted.length}
+          </label>
+          {visible.map((p) => (
+            <div key={p.id} className="pos-inv-card" style={{ background: selectedIds.has(p.id) ? 'var(--pine-pale)' : undefined }}>
+              <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+                <input type="checkbox" checked={selectedIds.has(p.id)} onChange={() => toggleSelected(p.id)} aria-label={`Select ${p.name}`} style={{ width: 18, height: 18, marginTop: 2, flexShrink: 0 }} />
+                <div style={{ flex: 1, minWidth: 0 }}><InvNameCell p={p} /></div>
+                <InvStatusPill p={p} />
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap', marginTop: 12 }}>
+                {stepperFor(p)}
+                <InvPrice p={p} settings={settings} align="right" />
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginTop: 10 }}>
+                <InvExpiry p={p} />
+                {actionsFor(p)}
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="pos-table-scroll" style={{ background: 'var(--paper)', border: '1px solid var(--border)', borderRadius: 12 }}>
+          <div style={{ minWidth: 990 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: INV_GRID, columnGap: 10, padding: '10px 16px', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5, color: 'var(--muted)', borderBottom: '1px solid var(--border)', alignItems: 'center' }}>
+              <input type="checkbox" checked={allVisibleSelected} onChange={toggleSelectAll} aria-label="Select all" />
+              <InvSortHeader label="Product" sortKey="name" sort={sort} onSort={toggleSort} />
+              <InvSortHeader label="Cost" sortKey="cost" sort={sort} onSort={toggleSort} />
+              <InvSortHeader label="Price" sortKey="price" sort={sort} onSort={toggleSort} />
+              <InvSortHeader label="Stock" sortKey="stock" sort={sort} onSort={toggleSort} />
+              <span>Status</span>
+              <InvSortHeader label="Expiry" sortKey="expiry" sort={sort} onSort={toggleSort} />
+              <span></span>
+            </div>
+            {visible.map((p) => (
+              <div key={p.id} className="pos-inv-row" style={{
+                display: 'grid', gridTemplateColumns: INV_GRID, columnGap: 10, padding: '10px 16px', fontSize: 13,
+                borderBottom: '1px solid var(--border)', alignItems: 'center',
+                background: selectedIds.has(p.id) ? 'var(--pine-pale)' : undefined
+              }}>
+                <input type="checkbox" checked={selectedIds.has(p.id)} onChange={() => toggleSelected(p.id)} aria-label={`Select ${p.name}`} />
+                <InvNameCell p={p} />
+                <span className="pos-mono" style={{ color: 'var(--muted)', whiteSpace: 'nowrap' }} title={p.cost > 0 ? '' : 'No buying price set'}>{p.cost > 0 ? formatMoney(p.cost, settings.currency) : '—'}</span>
+                <InvPrice p={p} settings={settings} />
+                {stepperFor(p)}
+                <span><InvStatusPill p={p} /></span>
+                <InvExpiry p={p} />
+                {actionsFor(p)}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {sorted.length > 0 && (
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap', padding: '12px 2px', fontSize: 12.5, color: 'var(--muted)' }}>
+          <span>Showing {visible.length} of {sorted.length}{sorted.length !== inventory.length ? ` (filtered from ${inventory.length})` : ''}</span>
+          {sorted.length > visible.length && (
+            <button type="button" className="pos-chip" onClick={() => setShown((n) => n + INV_PAGE)}>Show {Math.min(INV_PAGE, sorted.length - visible.length)} more</button>
+          )}
+        </div>
+      )}
+
+      {notice && (
+        <div role={notice.kind === 'error' ? 'alert' : 'status'} style={{
+          position: 'fixed', bottom: 20, left: '50%', transform: 'translateX(-50%)', zIndex: 96, maxWidth: '92vw',
+          display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', borderRadius: 10, fontSize: 13,
+          background: notice.kind === 'error' ? 'var(--red)' : 'var(--ink)', color: '#fff', boxShadow: '0 6px 20px rgba(0,0,0,0.25)'
+        }}>
+          {notice.kind === 'error' ? <AlertTriangle size={15} style={{ flexShrink: 0 }} /> : <CheckCircle size={15} style={{ flexShrink: 0 }} />}
+          <span>{notice.text}</span>
+          <button onClick={() => setNotice(null)} aria-label="Dismiss" style={{ background: 'none', border: 'none', color: '#fff', padding: 2, display: 'inline-flex', opacity: 0.8 }}><X size={14} /></button>
+        </div>
+      )}
 
       {modalProduct && <ProductModal product={modalProduct} onClose={() => setModalProduct(null)} onSave={upsert} />}
       {drugInfoProduct && <DrugInfoModal product={drugInfoProduct} onClose={() => setDrugInfoProduct(null)} />}
       {bulkModalOpen && (
         <BulkEditModal
           products={inventory.filter((p) => selectedIds.has(p.id))}
-          categories={Array.from(new Set(inventory.map((p) => p.category))).filter(Boolean)}
+          categories={categories}
           settings={settings}
           onApply={applyBulkEdit}
           onClose={() => setBulkModalOpen(false)}
