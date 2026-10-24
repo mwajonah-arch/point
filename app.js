@@ -563,6 +563,35 @@ function exportSalesCsv(salesList, settings) {
 // required — this listens globally so a scan works whether or not the
 // search box happens to be focused. Only exact SKU matches turn into an
 // action, so an accidental fast typist just gets ignored, not disrupted.
+// Typeable quantity box for a cart line. Keeps a local draft while typing
+// and commits on Enter/blur, so "12" doesn't get clamped mid-keystroke.
+function QtyInput({ line, onSet }) {
+  const [draft, setDraft] = useState(String(line.qty));
+  useEffect(() => { setDraft(String(line.qty)); }, [line.qty]);
+  const commit = () => {
+    const n = parseInt(draft, 10);
+    if (!Number.isFinite(n) || n < 1) { setDraft(String(line.qty)); return; }
+    const clamped = Math.min(n, line.maxStock);
+    setDraft(String(clamped));
+    onSet(line.id, n);
+  };
+  return (
+    <input
+      className="pos-mono pcs-qty-input"
+      data-qty-input="1"
+      type="text"
+      inputMode="numeric"
+      pattern="[0-9]*"
+      value={draft}
+      onChange={(e) => setDraft(e.target.value.replace(/[^0-9]/g, ''))}
+      onFocus={(e) => e.target.select()}
+      onBlur={commit}
+      onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); e.target.blur(); } }}
+      aria-label={`Quantity of ${line.name}`}
+    />
+  );
+}
+
 function useBarcodeScanner(onScan, enabled) {
   useEffect(() => {
     if (!enabled) return undefined;
@@ -572,6 +601,8 @@ function useBarcodeScanner(onScan, enabled) {
     const MIN_LENGTH = 4;
 
     const handler = (e) => {
+      // Cashier typing a quantity into the cart is not a barcode scan.
+      if (e.target && e.target.dataset && e.target.dataset.qtyInput) { buffer = ''; return; }
       const now = Date.now();
       if (now - lastTime > SCAN_GAP_MS) buffer = '';
       lastTime = now;
@@ -961,6 +992,9 @@ ${t.fontImport}
 .pcs-quick-btn[data-flash="true"] { border-color: var(--pine); background: var(--pine-pale); }
 
 .pcs-results { font-size: 12.5px; color: var(--muted); margin: -2px 0 10px; }
+.pcs-park { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 48px; padding: 0 16px; border-radius: 12px; border: 1px solid var(--border); background: #fff; color: var(--pine); font-size: 14px; font-weight: 600; }
+.pcs-park:hover:not(:disabled) { background: var(--pine-pale); }
+.pcs-park:disabled { color: #B9C4B4; cursor: not-allowed; }
 .pcs-link { background: none; border: none; padding: 6px 8px; border-radius: 7px; font-size: 12.5px; font-weight: 500; color: var(--pine); }
 .pcs-link:hover { background: var(--pine-pale); }
 
@@ -993,6 +1027,8 @@ ${t.fontImport}
 .pcs-step button:hover:not(:disabled) { background: var(--pine-pale); }
 .pcs-step button:disabled { color: #B9C4B4; cursor: not-allowed; }
 .pcs-step span { min-width: 30px; text-align: center; font-size: 14px; font-weight: 600; }
+.pcs-qty-input { width: 48px; height: 32px; border: none; border-left: 1px solid var(--border); border-right: 1px solid var(--border); border-radius: 0; text-align: center; font-size: 14px; font-weight: 600; background: #fff; color: var(--ink); padding: 0; }
+.pcs-qty-input:focus { outline: 2px solid var(--pine-light); outline-offset: -2px; }
 
 .pcs-charge { width: 100%; padding: 14px 0; border: none; border-radius: 11px; background: var(--pine); color: #fff; font-size: 15.5px; font-weight: 600; display: flex; align-items: center; justify-content: center; gap: 10px; transition: background-color 0.12s ease; }
 .pcs-charge:hover:not(:disabled) { background: var(--pine-light); }
@@ -1277,11 +1313,56 @@ function EmptyState({ icon: Icon, title, subtitle, compact }) {
 /* Staff / Cashier POS                                                     */
 /* ---------------------------------------------------------------------- */
 
+const PARKED_KEY = 'medipoint_parked_sales';
+const loadParked = () => {
+  try { const v = JSON.parse(localStorage.getItem(PARKED_KEY) || '[]'); return Array.isArray(v) ? v : []; }
+  catch (e) { return []; }
+};
+const saveParked = (list) => {
+  try { localStorage.setItem(PARKED_KEY, JSON.stringify(list)); } catch (e) { /* ignore */ }
+};
+
+// Lists sales set aside with "Park" so the cashier can serve someone else.
+function ParkedSalesModal({ parked, currency, onResume, onDiscard, onClose }) {
+  return (
+    <div className="pos-modal-backdrop" onClick={onClose}>
+      <div className="pos-modal" onClick={(e) => e.stopPropagation()} style={{ background: '#fff', borderRadius: 14, padding: 20, width: 420, maxHeight: '85vh', overflowY: 'auto' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+          <span className="pos-serif" style={{ fontWeight: 600, fontSize: 17 }}>Parked sales</span>
+          <button type="button" className="pos-icon-btn" onClick={onClose} aria-label="Close" style={{ color: 'var(--muted)' }}><X size={20} /></button>
+        </div>
+        {parked.length === 0 && <EmptyState icon={Clock} title="Nothing parked" subtitle="Tap Park in the cart to set a sale aside while you serve someone else." />}
+        {parked.map((p) => {
+          const units = p.items.reduce((n, i) => n + i.qty, 0);
+          const amount = p.items.reduce((n, i) => n + i.price * i.qty, 0);
+          return (
+            <div key={p.id} style={{ border: '1px solid var(--border)', borderRadius: 10, padding: '10px 12px', marginBottom: 8 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, fontSize: 13 }}>
+                <span style={{ fontWeight: 600 }}>Parked {new Date(p.parkedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                <span className="pos-mono">{formatMoney(amount, currency)}</span>
+              </div>
+              <div style={{ fontSize: 12.5, color: 'var(--muted)', margin: '4px 0 8px' }}>
+                {units} item{units !== 1 ? 's' : ''}: {p.items.map((i) => `${i.qty} x ${i.name}`).join(', ')}
+              </div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button type="button" className="pcs-charge" style={{ flex: 1, height: 36, fontSize: 13 }} onClick={() => onResume(p.id)}>Resume</button>
+                <button type="button" className="pcs-link" onClick={() => onDiscard(p.id)}>Discard</button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function StaffPOS({ inventory, sales, settings, user, addSale, updateStock, lastSynced, onLogout, saveInventory, adjustStockBy, logInventoryChange, voidSale, settleAccountSale }) {
   const [query, setQuery] = useState('');
   const [category, setCategory] = useState('All');
   const [cart, setCart] = useState([]);
   const [checkoutOpen, setCheckoutOpen] = useState(false);
+  const [parked, setParked] = useState(loadParked);
+  const [parkedOpen, setParkedOpen] = useState(false);
   const [receipt, setReceipt] = useState(null);
   const [cartOpen, setCartOpen] = useState(false);
   const [summaryOpen, setSummaryOpen] = useState(false);
@@ -1431,7 +1512,7 @@ function StaffPOS({ inventory, sales, settings, user, addSale, updateStock, last
     scanNoticeTimer.current = setTimeout(() => setScanNotice(''), 4000);
   }, [inventory]);
 
-  const scannerListening = !checkoutOpen && !summaryOpen && !inventoryOpen && !accountsOpen && !drugInfoProduct && !scannerOpen && !expiredConfirm;
+  const scannerListening = !checkoutOpen && !parkedOpen && !summaryOpen && !inventoryOpen && !accountsOpen && !drugInfoProduct && !scannerOpen && !expiredConfirm;
   useBarcodeScanner(handleBarcodeScan, scannerListening);
 
   // F2 opens checkout, "/" jumps to the search box (when not already typing).
@@ -1466,6 +1547,52 @@ function StaffPOS({ inventory, sales, settings, user, addSale, updateStock, last
       if (next > i.maxStock) return i;
       return { ...i, qty: next };
     }));
+  };
+
+  const setQty = (id, qty) => {
+    const line = cart.find((i) => i.id === id);
+    if (!line || !(qty >= 1)) return;
+    if (qty > line.maxStock) notify(`Only ${line.maxStock} of ${line.name} in stock.`);
+    const next = Math.min(qty, line.maxStock);
+    setCart((c) => c.map((i) => (i.id === id ? { ...i, qty: next } : i)));
+  };
+
+  const persistParked = (list) => { setParked(list); saveParked(list); };
+
+  const parkSale = () => {
+    if (cart.length === 0) return;
+    persistParked([...parked, { id: 'pk' + Date.now(), parkedAt: Date.now(), items: cart }]);
+    setCart([]);
+    setCartOpen(false);
+    notify('Sale parked. Find it under Parked.');
+  };
+
+  const resumeSale = (id) => {
+    const sale = parked.find((p) => p.id === id);
+    if (!sale) return;
+    // Stock and prices may have changed while it sat parked, so rebuild each
+    // line from live inventory and drop or trim whatever no longer fits.
+    let adjusted = false;
+    const rebuilt = [];
+    for (const line of sale.items) {
+      const product = inventory.find((p) => p.id === line.id);
+      if (!product || product.stock <= 0) { adjusted = true; continue; }
+      const qty = Math.min(line.qty, product.stock);
+      if (qty !== line.qty) adjusted = true;
+      rebuilt.push({ ...line, qty, price: product.price, cost: product.cost || 0, maxStock: product.stock, requiresRx: product.requiresRx });
+    }
+    // Swap: whatever is in the cart now gets parked in its place.
+    const rest = parked.filter((p) => p.id !== id);
+    const next = cart.length > 0 ? [...rest, { id: 'pk' + Date.now(), parkedAt: Date.now(), items: cart }] : rest;
+    persistParked(next);
+    setCart(rebuilt);
+    setParkedOpen(false);
+    if (adjusted) notify('Some items changed or ran out of stock while parked. Check the cart.');
+  };
+
+  const discardParked = (id) => {
+    if (!window.confirm('Discard this parked sale?')) return;
+    persistParked(parked.filter((p) => p.id !== id));
   };
 
   const removeFromCart = (id) => setCart((c) => c.filter((i) => i.id !== id));
@@ -1696,6 +1823,7 @@ function StaffPOS({ inventory, sales, settings, user, addSale, updateStock, last
               {cart.length > 0 && <span className="pcs-count">{unitCount} item{unitCount !== 1 ? 's' : ''}</span>}
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+              {parked.length > 0 && <button type="button" className="pcs-link" onClick={() => setParkedOpen(true)}>Parked ({parked.length})</button>}
               {cart.length > 0 && <button type="button" className="pcs-link" onClick={clearCart}>Clear</button>}
               <button type="button" className="pos-cart-close-btn pos-icon-btn" onClick={() => setCartOpen(false)} title="Close cart" aria-label="Close cart" style={{ color: 'var(--muted)' }}>
                 <X size={20} />
@@ -1716,7 +1844,7 @@ function StaffPOS({ inventory, sales, settings, user, addSale, updateStock, last
                 <div className="pcs-line-bottom">
                   <div className="pcs-step">
                     <button type="button" onClick={() => changeQty(i.id, -1)} disabled={i.qty <= 1} aria-label={`Fewer ${i.name}`}><Minus size={14} /></button>
-                    <span className="pos-mono">{i.qty}</span>
+                    <QtyInput line={i} onSet={setQty} />
                     <button type="button" onClick={() => changeQty(i.id, 1)} disabled={i.qty >= i.maxStock} aria-label={`More ${i.name}`}><Plus size={14} /></button>
                   </div>
                   <span className="pos-mono" style={{ fontSize: 14, fontWeight: 500 }}>{formatMoney(i.price * i.qty, settings.currency)}</span>
@@ -1738,12 +1866,28 @@ function StaffPOS({ inventory, sales, settings, user, addSale, updateStock, last
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', fontSize: 18, fontWeight: 700, marginBottom: 12 }}>
               <span className="pos-serif">Total</span><span className="pos-mono" style={{ fontSize: 22 }}>{formatMoney(total, settings.currency)}</span>
             </div>
-            <button type="button" className="pcs-charge" onClick={() => { setCheckoutOpen(true); setCartOpen(false); }} disabled={cart.length === 0} title="Shortcut: F2">
-              Charge {cart.length > 0 ? formatMoney(total, settings.currency) : ''}
-              {cart.length > 0 && <kbd>F2</kbd>}
-            </button>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button type="button" className="pcs-park" onClick={parkSale} disabled={cart.length === 0} title="Set this sale aside to serve someone else">
+                <Clock size={15} /> Park
+              </button>
+              <button type="button" className="pcs-charge" style={{ flex: 1 }} onClick={() => { setCheckoutOpen(true); setCartOpen(false); }} disabled={cart.length === 0} title="Shortcut: F2">
+                Charge {cart.length > 0 ? formatMoney(total, settings.currency) : ''}
+                {cart.length > 0 && <kbd>F2</kbd>}
+              </button>
+            </div>
           </div>
         </div>
+
+        {/* Mobile-only: with an empty cart, a way back to parked sales */}
+        {cart.length === 0 && parked.length > 0 && !cartOpen && (
+          <button className="pos-cart-mobile-bar" onClick={() => setParkedOpen(true)}>
+            <span style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, fontWeight: 600 }}>
+              <Clock size={16} />
+              Parked sales ({parked.length})
+            </span>
+            <ChevronRight size={16} />
+          </button>
+        )}
 
         {/* Mobile-only: tap to open the cart drawer */}
         {cart.length > 0 && !cartOpen && (
@@ -1760,6 +1904,7 @@ function StaffPOS({ inventory, sales, settings, user, addSale, updateStock, last
         )}
       </div>
 
+      {parkedOpen && <ParkedSalesModal parked={parked} currency={settings.currency} onResume={resumeSale} onDiscard={discardParked} onClose={() => setParkedOpen(false)} />}
       {checkoutOpen && (
         <CheckoutModal cart={cart} subtotal={subtotal} tax={tax} total={total} settings={settings} sales={sales}
           onClose={() => setCheckoutOpen(false)} onComplete={completeSale} />
