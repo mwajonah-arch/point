@@ -4,7 +4,7 @@ import {
   ShoppingCart, Plus, Minus, Trash2, Search, LogOut, Package, TrendingUp,
   AlertTriangle, Users, Settings as SettingsIcon, Receipt, CheckCircle, X,
   Pill, Edit2, ChevronRight, Banknote, CreditCard, Smartphone, LayoutDashboard,
-  ClipboardList, Info, Printer, MessageCircle, Camera, MoreHorizontal, Check, ArrowRight, Clock
+  ClipboardList, Info, Printer, MessageCircle, Camera, MoreHorizontal, Check, ArrowRight, Clock, Lock
 } from 'https://esm.sh/lucide-react@0.383.0?deps=react@18';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
@@ -2936,7 +2936,7 @@ function summarizeProductChange(before, after, settings) {
 // Small reusable "are you sure?" dialog for destructive actions (deleting a
 // product, removing a staff member, etc.) — mirrors the confirm-and-reason
 // pattern already used for voiding a sale, just without the reason field.
-function ConfirmModal({ title, message, confirmLabel = 'Delete', onConfirm, onCancel, busy, error }) {
+function ConfirmModal({ title, message, confirmLabel = 'Delete', busyLabel = 'Removing…', onConfirm, onCancel, busy, error }) {
   return (
     <div className="pos-modal-backdrop">
       <div style={{ width: 340, maxWidth: '100%', background: '#fff', borderRadius: 14, padding: 22 }}>
@@ -2946,7 +2946,7 @@ function ConfirmModal({ title, message, confirmLabel = 'Delete', onConfirm, onCa
         <div style={{ display: 'flex', gap: 8 }}>
           <button onClick={onCancel} disabled={busy} style={{ flex: 1, padding: '10px 0', borderRadius: 8, border: '1px solid var(--border)', background: '#fff', fontSize: 13, fontWeight: 600, color: 'var(--ink)' }}>Cancel</button>
           <button onClick={onConfirm} disabled={busy} style={{ flex: 1, padding: '10px 0', borderRadius: 8, border: 'none', background: 'var(--red)', color: '#fff', fontSize: 13, fontWeight: 600, opacity: busy ? 0.6 : 1 }}>
-            {busy ? 'Removing…' : confirmLabel}
+            {busy ? busyLabel : confirmLabel}
           </button>
         </div>
       </div>
@@ -4384,7 +4384,19 @@ function StaffTab({ staffList, saveStaff, sales = [], settings = {} }) {
   const [adminPin, setAdminPin] = useState('');
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState('');
+  const [notice, setNotice] = useState('');
   const [confirmDeleteId, setConfirmDeleteId] = useState(null);
+  const [confirmDeactivateId, setConfirmDeactivateId] = useState(null);
+  const [filter, setFilter] = useState('all');
+  const [query, setQuery] = useState('');
+  const adminPinRef = useRef(null);
+
+  // Success messages fade on their own so the page doesn't fill up with them.
+  useEffect(() => {
+    if (!notice) return undefined;
+    const t = setTimeout(() => setNotice(''), 4000);
+    return () => clearTimeout(t);
+  }, [notice]);
 
   // Every PIN add/change/delete is confirmed server-side against the
   // admin's own PIN — the browser never stores or reads anyone's real
@@ -4392,8 +4404,10 @@ function StaffTab({ staffList, saveStaff, sales = [], settings = {} }) {
   // back whether that succeeded.
   const callStaffAdmin = async (body) => {
     setActionError('');
+    setNotice('');
     if (!adminPin || adminPin.length !== 4) {
       setActionError('Enter your admin PIN above to make staff changes.');
+      if (adminPinRef.current) adminPinRef.current.focus();
       return false;
     }
     setBusy(true);
@@ -4412,34 +4426,66 @@ function StaffTab({ staffList, saveStaff, sales = [], settings = {} }) {
     }
   };
 
+  // Sales are recorded under the cashier's name, so two people sharing a
+  // name would have their sales merged together on this page and in reports.
+  const nameTaken = (candidate, exceptId) => {
+    const key = candidate.trim().toLowerCase();
+    return staffList.some((s) => s.id !== exceptId && String(s.name).trim().toLowerCase() === key);
+  };
+
   const add = async () => {
-    if (!name || pin.length !== 4) return;
+    const clean = name.trim();
+    if (!clean || pin.length !== 4) return;
+    if (nameTaken(clean)) {
+      setActionError(`There is already someone called "${clean}". Add an initial or surname so their sales are tracked separately.`);
+      return;
+    }
     const id = genId('s');
     const ok = await callStaffAdmin({ action: 'set', staffId: id, pin, role: 'staff' });
     if (!ok) return;
-    saveStaff([...staffList, { id, name, role: 'staff', canManageInventory: false }]);
+    saveStaff([...staffList, { id, name: clean, role: 'staff', canManageInventory: false }]);
     setName(''); setPin('');
+    setNotice(`${clean} added. They can log in with their PIN now.`);
   };
 
   const remove = async (id) => {
+    const who = staffList.find((s) => s.id === id);
     const ok = await callStaffAdmin({ action: 'delete', staffId: id });
     if (!ok) return;
     saveStaff(staffList.filter((s) => s.id !== id));
     setConfirmDeleteId(null);
+    if (who) setNotice(`${who.name} was removed.`);
   };
 
-  const startEdit = (s) => { setEditingId(s.id); setEditName(s.name); setEditPin(''); };
+  // Deactivate = can't log in, but the account, its name and its sales history
+  // stay. Reactivate brings it back with the same PIN. (Remove is permanent.)
+  const setActive = async (id, active) => {
+    const who = staffList.find((s) => s.id === id);
+    const ok = await callStaffAdmin({ action: 'set-active', staffId: id, active });
+    if (!ok) return;
+    saveStaff(staffList.map((s) => (s.id === id ? { ...s, active } : s)));
+    setConfirmDeactivateId(null);
+    if (who) setNotice(active ? `${who.name} is active again and can log in with their old PIN.` : `${who.name} was deactivated.`);
+  };
+
+  const startEdit = (s) => { setActionError(''); setEditingId(s.id); setEditName(s.name); setEditPin(''); };
   const cancelEdit = () => setEditingId(null);
   const saveEdit = async (id) => {
-    if (!editName) return;
+    const clean = editName.trim();
+    if (!clean) return;
     if (editPin && editPin.length !== 4) return; // only validate PIN if actually changing it
+    if (nameTaken(clean, id)) {
+      setActionError(`There is already someone called "${clean}". Use a different name so their sales are tracked separately.`);
+      return;
+    }
     if (editPin) {
       const target = staffList.find((s) => s.id === id);
       const ok = await callStaffAdmin({ action: 'set', staffId: id, pin: editPin, role: target.role });
       if (!ok) return;
     }
-    saveStaff(staffList.map((s) => (s.id === id ? { ...s, name: editName } : s)));
+    saveStaff(staffList.map((s) => (s.id === id ? { ...s, name: clean } : s)));
     setEditingId(null);
+    setNotice(editPin ? 'Name and PIN updated.' : 'Name updated.');
   };
 
   const toggleInventoryAccess = async (id, checked) => {
@@ -4452,72 +4498,271 @@ function StaffTab({ staffList, saveStaff, sales = [], settings = {} }) {
     saveStaff(staffList.map((s) => (s.id === id ? { ...s, canManageInventory: checked } : s)));
   };
 
-  return (
-    <div>
-      <PageHeader title="Staff accounts" subtitle="Who can sign in, what they can do, and how today is going for each of them." />
-      <div style={{ marginBottom: 14 }}>
-        <label style={{ fontSize: 12, color: 'var(--muted)' }}>Your admin PIN — required to add, edit, or remove a PIN below</label>
-        <input type="password" inputMode="numeric" autoComplete="off" value={adminPin}
-          onChange={(e) => setAdminPin(e.target.value.replace(/\D/g, '').slice(0, 4))} placeholder="••••"
-          style={{ width: 140, padding: '8px 10px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 13, marginTop: 4, display: 'block' }} />
+  const isOff = (s) => s.active === false;
+  const activeCount = staffList.filter((s) => !isOff(s)).length;
+  const offCount = staffList.length - activeCount;
+  const todaySales = sales.filter((x) => !x.voided && isSameDay(x.timestamp, now));
+  const todayTotal = todaySales.reduce((sum, x) => sum + x.total, 0);
+
+  const q = query.trim().toLowerCase();
+  const visible = staffList
+    .filter((s) => (filter === 'active' ? !isOff(s) : filter === 'off' ? isOff(s) : true))
+    .filter((s) => !q || String(s.name).toLowerCase().includes(q))
+    .sort((a, b) => (isOff(a) - isOff(b)) || ((b.role === 'admin') - (a.role === 'admin')));
+
+  const onEnter = (fn) => (e) => { if (e.key === 'Enter') fn(); };
+  const pinReady = adminPin.length === 4;
+  const canAdd = name.trim() && pin.length === 4 && !busy;
+
+  const renderEdit = (s) => (
+    <div key={s.id} className="staff-row staff-row-edit">
+      <div className="staff-edit-fields">
+        <label className="staff-field">
+          <span>Full name</span>
+          <input value={editName} onChange={(e) => setEditName(e.target.value)} autoFocus
+            onKeyDown={(e) => { if (e.key === 'Enter') saveEdit(s.id); if (e.key === 'Escape') cancelEdit(); }} />
+        </label>
+        <label className="staff-field staff-field-pin">
+          <span>New PIN (optional)</span>
+          <input value={editPin} inputMode="numeric" autoComplete="off" placeholder="4 digits"
+            onChange={(e) => setEditPin(e.target.value.replace(/\D/g, '').slice(0, 4))}
+            onKeyDown={(e) => { if (e.key === 'Enter') saveEdit(s.id); if (e.key === 'Escape') cancelEdit(); }} />
+        </label>
       </div>
-      {actionError && <p style={{ color: 'var(--red)', fontSize: 12, marginBottom: 10 }}>{actionError}</p>}
-      <div style={{ background: 'var(--paper)', border: '1px solid var(--border)', borderRadius: 12, marginBottom: 20 }}>
-        {staffList.map((s) => (
-          editingId === s.id ? (
-            <div key={s.id} style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', padding: '11px 16px', borderBottom: '1px solid var(--border)' }}>
-              <input value={editName} onChange={(e) => setEditName(e.target.value)} placeholder="Full name"
-                style={{ flex: '1 1 140px', padding: '7px 10px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13 }} />
-              <input value={editPin} onChange={(e) => setEditPin(e.target.value.replace(/\D/g, '').slice(0, 4))} placeholder="New PIN (optional)"
-                style={{ width: 140, padding: '7px 10px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13 }} />
-              <button onClick={() => saveEdit(s.id)} disabled={busy} style={{ background: 'var(--pine)', color: '#fff', border: 'none', borderRadius: 7, padding: '7px 14px', fontSize: 12, fontWeight: 600, opacity: busy ? 0.6 : 1 }}>Save</button>
-              <button onClick={cancelEdit} style={{ background: 'none', border: '1px solid var(--border)', borderRadius: 7, padding: '7px 14px', fontSize: 12, color: 'var(--muted)' }}>Cancel</button>
-            </div>
+      <p className="staff-hint">Leave the PIN empty to keep it as it is. Sales already made stay under the old name.</p>
+      <div className="staff-edit-actions">
+        <button className="staff-btn staff-btn-primary" onClick={() => saveEdit(s.id)} disabled={busy || !editName.trim() || (editPin.length > 0 && editPin.length !== 4)}>Save</button>
+        <button className="staff-btn" onClick={cancelEdit}>Cancel</button>
+      </div>
+    </div>
+  );
+
+  const renderRow = (s) => {
+    if (editingId === s.id) return renderEdit(s);
+    const off = isOff(s);
+    const admin = s.role === 'admin';
+    const st = statsFor(s.name);
+    const on = !!s.canManageInventory;
+    return (
+      <div key={s.id} className="staff-row" data-off={off ? 'true' : 'false'}>
+        <div className="staff-main">
+          <span className="staff-avatar" data-admin={admin ? 'true' : 'false'}>{initialsOf(s.name)}</span>
+          <span className="staff-info">
+            <span className="staff-name">
+              {s.name}
+              <span className="staff-badge" data-kind={admin ? 'admin' : 'staff'}>{admin ? 'Admin' : 'Cashier'}</span>
+              {off && <span className="staff-badge" data-kind="off">Deactivated</span>}
+            </span>
+            {!admin && (
+              <span className="staff-meta">
+                {off
+                  ? `Can’t log in${st.last ? ` · last sale ${timeAgo(st.last.timestamp)}` : ''}`
+                  : `Today: ${st.count} sale${st.count !== 1 ? 's' : ''}${st.count ? ` · ${formatMoney(st.total, settings.currency)}` : ''}${st.last ? ` · last sale ${timeAgo(st.last.timestamp)}` : ' · no sales yet'}`}
+              </span>
+            )}
+          </span>
+        </div>
+        <div className="staff-actions">
+          {off ? (
+            <>
+              <button className="staff-btn staff-btn-primary" onClick={() => setActive(s.id, true)} disabled={busy}>Reactivate</button>
+              <button className="pos-icon-btn pos-icon-btn-danger" onClick={() => setConfirmDeleteId(s.id)} disabled={busy} title="Remove permanently" aria-label={`Remove ${s.name} permanently`} style={{ color: 'var(--red)' }}><Trash2 size={15} /></button>
+            </>
           ) : (
-            <div key={s.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '11px 16px', borderBottom: '1px solid var(--border)', fontSize: 13, flexWrap: 'wrap', gap: 8 }}>
-              <span style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <span style={{ width: 32, height: 32, borderRadius: 999, background: 'var(--pine-pale)', color: 'var(--pine)', fontSize: 12, fontWeight: 700, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>{initialsOf(s.name)}</span>
-                <span>
-                  <span style={{ fontWeight: 600 }}>{s.name}</span>
-                  <span style={{ marginLeft: 8, fontSize: 10, fontWeight: 700, textTransform: 'uppercase', padding: '2px 6px', borderRadius: 5, color: s.role === 'admin' ? 'var(--pine)' : 'var(--muted)', background: s.role === 'admin' ? 'var(--pine-pale)' : 'var(--bg)' }}>{s.role}</span>
-                  {s.role !== 'admin' && (() => { const st = statsFor(s.name); return (
-                    <span style={{ display: 'block', fontSize: 11.5, color: 'var(--muted)', marginTop: 2 }}>
-                      Today: {st.count} sale{st.count !== 1 ? 's' : ''}{st.count ? ` · ${formatMoney(st.total, settings.currency)}` : ''}{st.last ? ` · last sale ${timeAgo(st.last.timestamp)}` : ' · no sales yet'}
-                    </span>); })()}
-                </span>
-              </span>
-              <span style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-                {s.role !== 'admin' && (
-                  <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--muted)' }}>
-                    <input
-                      type="checkbox"
-                      checked={!!s.canManageInventory}
-                      onChange={(e) => toggleInventoryAccess(s.id, e.target.checked)}
-                    />
-                    Can add inventory
-                  </label>
-                )}
-                <span className="pos-mono" style={{ color: 'var(--muted)' }}>PIN ••••</span>
-                <button className="pos-icon-btn" onClick={() => startEdit(s)} title="Change name or PIN" style={{ color: 'var(--muted)' }}><Edit2 size={14} /></button>
-                {s.role !== 'admin' && <button className="pos-icon-btn pos-icon-btn-danger" onClick={() => setConfirmDeleteId(s.id)} disabled={busy} title="Remove staff account" style={{ color: 'var(--red)' }}><Trash2 size={14} /></button>}
-              </span>
-            </div>
-          )
-        ))}
+            <>
+              {!admin && (
+                <label className="staff-toggle" title="Lets this cashier add and edit products">
+                  <button type="button" role="switch" aria-checked={on} className="staff-switch" data-on={on ? 'true' : 'false'}
+                    onClick={() => toggleInventoryAccess(s.id, !on)} disabled={busy}><span /></button>
+                  <span>Can add inventory</span>
+                </label>
+              )}
+              <button className="pos-icon-btn" onClick={() => startEdit(s)} title="Change name or PIN" aria-label={`Edit ${s.name}`} style={{ color: 'var(--muted)' }}><Edit2 size={15} /></button>
+              {!admin && <button className="staff-btn" onClick={() => setConfirmDeactivateId(s.id)} disabled={busy} title="Block login but keep the account and its sales history">Deactivate</button>}
+              {!admin && <button className="pos-icon-btn pos-icon-btn-danger" onClick={() => setConfirmDeleteId(s.id)} disabled={busy} title="Remove permanently" aria-label={`Remove ${s.name} permanently`} style={{ color: 'var(--red)' }}><Trash2 size={15} /></button>}
+            </>
+          )}
+        </div>
       </div>
-      <h3 className="pos-serif" style={{ fontSize: 15, fontWeight: 600, marginBottom: 10 }}>Add cashier</h3>
-      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Full name" style={{ flex: '1 1 140px', padding: '9px 12px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 13 }} />
-        <input value={pin} onChange={(e) => setPin(e.target.value.replace(/\D/g, '').slice(0, 4))} placeholder="4-digit PIN" style={{ width: 120, padding: '9px 12px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 13 }} />
-        <button onClick={add} disabled={busy} style={{ background: 'var(--pine)', color: '#fff', border: 'none', borderRadius: 8, padding: '9px 16px', fontSize: 13, fontWeight: 600, opacity: busy ? 0.6 : 1 }}>Add</button>
+    );
+  };
+
+  const filters = [['all', 'All', staffList.length], ['active', 'Active', activeCount], ['off', 'Deactivated', offCount]];
+
+  return (
+    <div className="staff-page">
+      <style>{`
+        .staff-page { max-width: 880px; }
+        .staff-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 14px; }
+        .staff-stat { background: var(--paper); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; }
+        .staff-stat-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
+        .staff-stat-value { font-size: 20px; font-weight: 700; margin-top: 2px; }
+        .staff-stat-sub { font-size: 11.5px; color: var(--muted); margin-top: 1px; }
+        .staff-pinbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; background: var(--paper); border: 1px solid var(--border); border-radius: 12px; padding: 12px 16px; margin-bottom: 14px; transition: border-color .15s, background-color .15s; }
+        .staff-pinbar[data-ready="true"] { border-color: var(--pine-light); background: var(--pine-pale); }
+        .staff-pinbar[data-error="true"] { border-color: var(--red); background: var(--red-pale); }
+        .staff-pinbar-text { display: flex; align-items: center; gap: 10px; min-width: 0; }
+        .staff-pinbar-icon { width: 30px; height: 30px; border-radius: 999px; background: var(--pine-pale); color: var(--pine); display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
+        .staff-pinbar[data-ready="true"] .staff-pinbar-icon { background: var(--pine); color: #fff; }
+        .staff-pinbar-title { font-size: 13px; font-weight: 600; display: block; }
+        .staff-pinbar-sub { font-size: 11.5px; color: var(--muted); display: block; }
+        .staff-pinbar input { width: 120px; padding: 9px 12px; border-radius: 8px; border: 1px solid var(--border); font-size: 15px; letter-spacing: 0.3em; text-align: center; background: #fff; }
+        .staff-notice { display: flex; align-items: center; gap: 8px; background: var(--pine-pale); color: var(--pine); border: 1px solid var(--pine-light); border-radius: 10px; padding: 9px 14px; font-size: 12.5px; font-weight: 500; margin-bottom: 12px; }
+        .staff-error { background: var(--red-pale); color: var(--red); border: 1px solid var(--red); border-radius: 10px; padding: 9px 14px; font-size: 12.5px; margin-bottom: 12px; }
+        .staff-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+        .staff-search { position: relative; flex: 1 1 200px; max-width: 320px; }
+        .staff-search input { width: 100%; padding: 8px 10px 8px 32px; border-radius: 8px; border: 1px solid var(--border); font-size: 13px; background: #fff; }
+        .staff-search svg { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); color: var(--muted); pointer-events: none; }
+        .staff-seg { display: inline-flex; background: var(--pine-pale); border-radius: 9px; padding: 3px; gap: 2px; }
+        .staff-seg button { border: none; background: none; padding: 6px 12px; border-radius: 7px; font-size: 12px; font-weight: 600; color: var(--muted); }
+        .staff-seg button[data-on="true"] { background: #fff; color: var(--pine); box-shadow: 0 1px 2px rgba(0,0,0,.08); }
+        .staff-seg small { font-weight: 500; opacity: .7; margin-left: 4px; }
+        .staff-card { background: var(--paper); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; margin-bottom: 22px; }
+        .staff-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 13px 16px; border-bottom: 1px solid var(--border); font-size: 13px; transition: background-color .12s; }
+        .staff-row:last-child { border-bottom: none; }
+        .staff-row:hover { background: rgba(231,238,233,.45); }
+        .staff-row[data-off="true"] .staff-main { opacity: .55; }
+        .staff-main { display: flex; align-items: center; gap: 12px; min-width: 0; flex: 1 1 260px; }
+        .staff-avatar { width: 36px; height: 36px; border-radius: 999px; background: var(--pine-pale); color: var(--pine); font-size: 12px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
+        .staff-avatar[data-admin="true"] { background: var(--pine); color: #fff; }
+        .staff-info { display: flex; flex-direction: column; min-width: 0; }
+        .staff-name { font-weight: 600; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+        .staff-badge { font-size: 10px; font-weight: 700; text-transform: uppercase; padding: 2px 6px; border-radius: 5px; letter-spacing: 0.03em; }
+        .staff-badge[data-kind="admin"] { color: var(--pine); background: var(--pine-pale); }
+        .staff-badge[data-kind="staff"] { color: var(--muted); background: #EEF1EA; }
+        .staff-badge[data-kind="off"] { color: var(--red); background: var(--red-pale); }
+        .staff-meta { font-size: 11.5px; color: var(--muted); margin-top: 2px; }
+        .staff-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+        .staff-btn { border: 1px solid var(--border); background: #fff; color: var(--ink); border-radius: 8px; padding: 7px 12px; font-size: 12px; font-weight: 600; transition: background-color .12s, opacity .12s; }
+        .staff-btn:hover:not(:disabled) { background: var(--pine-pale); }
+        .staff-btn:disabled { opacity: .5; cursor: not-allowed; }
+        .staff-btn-primary { background: var(--pine); border-color: var(--pine); color: #fff; }
+        .staff-btn-primary:hover:not(:disabled) { background: var(--pine-light); }
+        .staff-toggle { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); cursor: pointer; }
+        .staff-switch { width: 34px; height: 20px; border-radius: 999px; border: none; background: #C7D0C0; position: relative; padding: 0; transition: background-color .15s; flex-shrink: 0; }
+        .staff-switch span { position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 999px; background: #fff; transition: transform .15s; box-shadow: 0 1px 2px rgba(0,0,0,.25); }
+        .staff-switch[data-on="true"] { background: var(--pine); }
+        .staff-switch[data-on="true"] span { transform: translateX(14px); }
+        .staff-switch:disabled { opacity: .5; cursor: not-allowed; }
+        .staff-row-edit { align-items: flex-start; flex-direction: column; background: var(--pine-pale); gap: 10px; }
+        .staff-edit-fields { display: flex; gap: 10px; flex-wrap: wrap; width: 100%; }
+        .staff-field { display: flex; flex-direction: column; gap: 4px; flex: 1 1 200px; font-size: 11.5px; color: var(--muted); font-weight: 500; }
+        .staff-field-pin { flex: 0 1 160px; }
+        .staff-field input, .staff-add input { padding: 9px 11px; border-radius: 8px; border: 1px solid var(--border); font-size: 13px; background: #fff; color: var(--ink); }
+        .staff-hint { font-size: 11.5px; color: var(--muted); margin: 0; }
+        .staff-edit-actions { display: flex; gap: 8px; }
+        .staff-empty { padding: 28px 16px; text-align: center; color: var(--muted); font-size: 13px; }
+        .staff-add { background: var(--paper); border: 1px solid var(--border); border-radius: 12px; padding: 16px; }
+        .staff-add-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; }
+        @media (max-width: 600px) {
+          .staff-stats { grid-template-columns: 1fr 1fr; }
+          .staff-stats .staff-stat:last-child { grid-column: span 2; }
+          .staff-pinbar input { width: 100%; }
+          .staff-pinbar > label { width: 100%; }
+          .staff-actions { width: 100%; padding-left: 48px; }
+          .staff-search { max-width: none; }
+        }
+      `}</style>
+
+      <PageHeader title="Staff accounts" subtitle="Who can sign in, what they can do, and how today is going for each of them." />
+
+      <div className="staff-stats">
+        <div className="staff-stat">
+          <div className="staff-stat-label">Active staff</div>
+          <div className="staff-stat-value pos-serif">{activeCount}</div>
+          <div className="staff-stat-sub">can log in</div>
+        </div>
+        <div className="staff-stat">
+          <div className="staff-stat-label">Sold today</div>
+          <div className="staff-stat-value pos-serif">{formatMoney(todayTotal, settings.currency)}</div>
+          <div className="staff-stat-sub">{todaySales.length} sale{todaySales.length !== 1 ? 's' : ''}</div>
+        </div>
+        <div className="staff-stat">
+          <div className="staff-stat-label">Deactivated</div>
+          <div className="staff-stat-value pos-serif">{offCount}</div>
+          <div className="staff-stat-sub">{offCount ? 'can be reactivated' : 'none'}</div>
+        </div>
       </div>
+
+      <div className="staff-pinbar" data-ready={pinReady ? 'true' : 'false'} data-error={!pinReady && actionError.includes('admin PIN') ? 'true' : 'false'}>
+        <div className="staff-pinbar-text">
+          <span className="staff-pinbar-icon">{pinReady ? <Check size={15} /> : <Lock size={14} />}</span>
+          <span>
+            <span className="staff-pinbar-title">{pinReady ? 'Admin PIN entered' : 'Enter your admin PIN to make changes'}</span>
+            <span className="staff-pinbar-sub">Needed for adding, editing, deactivating and removing staff. It’s checked on the server and never stored.</span>
+          </span>
+        </div>
+        <label>
+          <input ref={adminPinRef} type="password" inputMode="numeric" autoComplete="off" aria-label="Admin PIN" value={adminPin}
+            onChange={(e) => setAdminPin(e.target.value.replace(/\D/g, '').slice(0, 4))} placeholder="••••" />
+        </label>
+      </div>
+
+      {notice && <div className="staff-notice" role="status"><Check size={14} /> {notice}</div>}
+      {actionError && <div className="staff-error" role="alert">{actionError}</div>}
+
+      <div className="staff-toolbar">
+        <div className="staff-search">
+          <Search size={14} />
+          <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search staff" aria-label="Search staff" />
+        </div>
+        <div className="staff-seg" role="tablist">
+          {filters.map(([key, label, count]) => (
+            <button key={key} role="tab" aria-selected={filter === key} data-on={filter === key ? 'true' : 'false'} onClick={() => setFilter(key)}>
+              {label}<small>{count}</small>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="staff-card">
+        {visible.length === 0 ? (
+          <div className="staff-empty">
+            {staffList.length === 0 ? 'No staff yet. Add your first cashier below.' : 'No one matches that search or filter.'}
+          </div>
+        ) : visible.map(renderRow)}
+      </div>
+
+      <h3 className="pos-serif" style={{ fontSize: 15, fontWeight: 600, marginBottom: 10 }}>Add a cashier</h3>
+      <div className="staff-add">
+        <div className="staff-add-row">
+          <label className="staff-field">
+            <span>Full name</span>
+            <input value={name} onChange={(e) => setName(e.target.value)} onKeyDown={onEnter(add)} placeholder="e.g. Jane Wanjiku" />
+          </label>
+          <label className="staff-field staff-field-pin">
+            <span>4-digit PIN</span>
+            <input value={pin} inputMode="numeric" autoComplete="off" onKeyDown={onEnter(add)} placeholder="••••"
+              onChange={(e) => setPin(e.target.value.replace(/\D/g, '').slice(0, 4))} />
+          </label>
+          <button className="staff-btn staff-btn-primary" onClick={add} disabled={!canAdd} style={{ padding: '10px 18px', fontSize: 13 }}>{busy ? 'Saving…' : 'Add cashier'}</button>
+        </div>
+        <p className="staff-hint" style={{ marginTop: 10 }}>New cashiers can take sales straight away. Turn on “Can add inventory” in their row if they should manage products too.</p>
+      </div>
+
+      {confirmDeactivateId && (() => {
+        const s = staffList.find((x) => x.id === confirmDeactivateId);
+        if (!s) return null;
+        return (
+          <ConfirmModal
+            title="Deactivate this staff account?"
+            message={`"${s.name}" won't be able to log in. Their sales history stays, and you can reactivate them any time with the same PIN. If they're logged in right now, they can keep working until that session expires.`}
+            confirmLabel="Deactivate"
+            busyLabel="Deactivating…"
+            busy={busy}
+            error={actionError}
+            onCancel={() => setConfirmDeactivateId(null)}
+            onConfirm={() => setActive(s.id, false)}
+          />
+        );
+      })()}
       {confirmDeleteId && (() => {
         const s = staffList.find((x) => x.id === confirmDeleteId);
         if (!s) return null;
         return (
           <ConfirmModal
             title="Remove this staff account?"
-            message={`"${s.name}" will lose access immediately and won't be able to log in again. This can't be undone.`}
+            message={`"${s.name}" will lose access immediately and won't be able to log in again. This can't be undone. To keep their history and allow a return later, use Deactivate instead.`}
             confirmLabel="Remove"
             busy={busy}
             error={actionError}
