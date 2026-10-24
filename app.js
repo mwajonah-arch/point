@@ -1105,7 +1105,7 @@ function StaffPOS({ inventory, sales, settings, user, addSale, updateStock, last
         return c.map((i) => (i.id === product.id ? { ...i, qty: i.qty + 1 } : i));
       }
       return [...c, {
-        id: product.id, name: product.name, price: product.price, qty: 1,
+        id: product.id, name: product.name, price: product.price, cost: product.cost || 0, qty: 1,
         requiresRx: product.requiresRx, maxStock: product.stock,
         // Stamped only when this line was added through the expired-item
         // confirm dialog (see requestAddToCart/expiredConfirm below), so
@@ -1189,8 +1189,9 @@ function StaffPOS({ inventory, sales, settings, user, addSale, updateStock, last
       id: genId('sale'),
       timestamp: new Date().toISOString(),
       cashier: user.name,
-      items: cart.map(({ id, name, price, qty, expiredAtSale }) => ({
-        id, name, price, qty, ...(expiredAtSale ? { expiredAtSale: true } : {}),
+      items: cart.map(({ id, name, price, cost, qty, expiredAtSale }) => ({
+        id, name, price, qty, cost: cost || 0, // buying price frozen at time of sale, so later cost changes don't rewrite old profit
+        ...(expiredAtSale ? { expiredAtSale: true } : {}),
       })),
       subtotal, tax, total,
       paymentMethod: payment.method,
@@ -2447,18 +2448,43 @@ function AdminConsole({ inventory, sales, staffList, settings, user, onLogout, l
   );
 }
 
-function StatCard({ label, value, accent }) {
+function StatCard({ label, value, accent, sub, delta, deltaLabel }) {
   return (
     <div style={{ background: 'var(--paper)', border: '1px solid var(--border)', borderRadius: 12, padding: '16px 18px' }}>
       <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 6 }}>{label}</div>
       <div className="pos-serif" style={{ fontSize: 24, fontWeight: 700, color: accent || 'var(--ink)' }}>{value}</div>
+      {(sub || delta != null) && (
+        <div style={{ fontSize: 11.5, color: 'var(--muted)', marginTop: 4, lineHeight: 1.35 }}>
+          {delta != null && <span style={{ fontWeight: 700, color: delta >= 0 ? 'var(--pine)' : 'var(--red)' }}>{delta >= 0 ? '▲' : '▼'} {Math.abs(delta).toFixed(0)}% </span>}
+          {delta != null && deltaLabel}{delta != null && sub ? ' · ' : ''}{sub}
+        </div>
+      )}
     </div>
   );
 }
 
+// Sales ex-VAT minus buying cost. Uses the cost frozen onto each sale line;
+// older sales (before buying prices existed) fall back to the product's
+// current cost, and lines with no known cost are left out of profit and
+// reported through `coverage` so the number is never silently overstated.
+function summarizeProfit(list, costById) {
+  let sales = 0, profit = 0, known = 0;
+  for (const sl of list) {
+    for (const i of sl.items || []) {
+      const line = i.price * i.qty;
+      sales += line;
+      const unit = Number(i.cost) > 0 ? Number(i.cost) : (costById.get(i.id) > 0 ? costById.get(i.id) : null);
+      if (unit !== null) { profit += line - unit * i.qty; known += line; }
+    }
+  }
+  return { sales, profit, known, margin: known ? (profit / known) * 100 : null, coverage: sales ? known / sales : 1 };
+}
+const pctChange = (cur, prev) => (prev > 0 ? ((cur - prev) / prev) * 100 : null);
+
 // Interactive 7-day revenue chart — tap/click a day to see its totals.
 // Plain divs sized by percentage, no charting library needed.
-function RevenueTrend({ sales, settings }) {
+function RevenueTrend({ sales, settings, costById }) {
+  const [metric, setMetric] = useState('revenue');
   const days = useMemo(() => {
     const arr = [];
     for (let i = 6; i >= 0; i--) {
@@ -2469,22 +2495,30 @@ function RevenueTrend({ sales, settings }) {
         label: d.toLocaleDateString(undefined, { weekday: 'short' }),
         dateLabel: d.toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' }),
         revenue: daySales.reduce((sum, s) => sum + s.total, 0),
+        profit: summarizeProfit(daySales, costById).profit,
         count: daySales.length,
       });
     }
     return arr;
-  }, [sales]);
+  }, [sales, costById]);
 
   const [selected, setSelected] = useState(6); // default to today
-  const max = Math.max(1, ...days.map((d) => d.revenue));
+  const max = Math.max(1, ...days.map((d) => Math.max(0, d[metric])));
   const sel = days[selected];
 
   return (
     <div style={{ background: 'var(--paper)', border: '1px solid var(--border)', borderRadius: 12, padding: 16, marginBottom: 20 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 14, flexWrap: 'wrap', gap: 8 }}>
-        <h3 className="pos-serif" style={{ fontSize: 15, fontWeight: 600 }}>Last 7 days</h3>
+        <div>
+          <h3 className="pos-serif" style={{ fontSize: 15, fontWeight: 600, marginBottom: 6 }}>Last 7 days</h3>
+          <div style={{ display: 'flex', gap: 3, background: 'var(--bg)', borderRadius: 7, padding: 2, width: 'fit-content' }}>
+            {[['revenue', 'Sales'], ['profit', 'Profit']].map(([k, l]) => (
+              <button key={k} onClick={() => setMetric(k)} style={{ padding: '3px 10px', borderRadius: 5, border: 'none', fontSize: 11.5, fontWeight: 600, background: metric === k ? 'var(--pine)' : 'transparent', color: metric === k ? '#fff' : 'var(--muted)' }}>{l}</button>
+            ))}
+          </div>
+        </div>
         <div style={{ textAlign: 'right' }}>
-          <div className="pos-mono" style={{ fontSize: 17, fontWeight: 700 }}>{formatMoney(sel.revenue, settings.currency)}</div>
+          <div className="pos-mono" style={{ fontSize: 17, fontWeight: 700 }}>{formatMoney(sel[metric], settings.currency)}</div>
           <div style={{ fontSize: 11, color: 'var(--muted)' }}>{sel.count} sale{sel.count !== 1 ? 's' : ''} · {sel.dateLabel}</div>
         </div>
       </div>
@@ -2496,7 +2530,7 @@ function RevenueTrend({ sales, settings }) {
           }}>
             <div style={{
               width: '100%', maxWidth: 30, borderRadius: 4,
-              height: `${Math.max(4, (d.revenue / max) * 66)}px`,
+              height: `${Math.max(4, (Math.max(0, d[metric]) / max) * 66)}px`,
               background: i === selected ? 'var(--pine)' : 'var(--pine-pale)',
               transition: 'background .15s, height .2s'
             }} />
@@ -2508,27 +2542,24 @@ function RevenueTrend({ sales, settings }) {
   );
 }
 
-// Whether a timestamp falls within a given reporting window, anchored to
-// calendar boundaries (start of today / start of this week / start of this
-// month) rather than a rolling N-day lookback, since that's what a pharmacy
-// owner planning restocks or checking in on the month actually expects.
-function isInDashboardRange(timestamp, range) {
-  const d = new Date(timestamp);
+// Reporting window anchored to calendar boundaries (today / this week from
+// Monday / this month), plus the equivalent span just before it, so every
+// figure can be compared like-for-like (e.g. Monday-to-now vs last Monday-to-now).
+function dashboardWindow(range) {
   const now = new Date();
-  if (range === 'today') return isSameDay(timestamp, now);
+  let start, prevStart, prevLabel;
   if (range === 'week') {
-    const start = new Date(now);
-    const dow = start.getDay(); // 0 = Sun
-    const diffToMonday = dow === 0 ? 6 : dow - 1;
-    start.setDate(start.getDate() - diffToMonday);
-    start.setHours(0, 0, 0, 0);
-    return d >= start && d <= now;
+    start = new Date(now); start.setDate(start.getDate() - (start.getDay() === 0 ? 6 : start.getDay() - 1)); start.setHours(0, 0, 0, 0);
+    prevStart = new Date(start); prevStart.setDate(prevStart.getDate() - 7); prevLabel = 'vs last week';
+  } else if (range === 'month') {
+    start = new Date(now.getFullYear(), now.getMonth(), 1);
+    prevStart = new Date(now.getFullYear(), now.getMonth() - 1, 1); prevLabel = 'vs last month';
+  } else {
+    start = new Date(now); start.setHours(0, 0, 0, 0);
+    prevStart = new Date(start); prevStart.setDate(prevStart.getDate() - 1); prevLabel = 'vs yesterday';
   }
-  if (range === 'month') {
-    const start = new Date(now.getFullYear(), now.getMonth(), 1);
-    return d >= start && d <= now;
-  }
-  return true;
+  const prevEnd = new Date(Math.min(prevStart.getTime() + (now - start), start.getTime() - 1));
+  return { start, end: now, prevStart, prevEnd, prevLabel };
 }
 
 const DASHBOARD_RANGES = [
@@ -2540,8 +2571,21 @@ const DASHBOARD_RANGES = [
 function DashboardTab({ inventory, sales, settings }) {
   const [range, setRange] = useState('today');
   const rangeLabel = DASHBOARD_RANGES.find((r) => r.key === range).label;
-  const rangeSales = sales.filter((s) => isInDashboardRange(s.timestamp, range) && !s.voided);
+  const win = dashboardWindow(range);
+  const within = (s, from, to) => { const d = new Date(s.timestamp); return d >= from && d <= to; };
+  const liveSales = sales.filter((s) => !s.voided);
+  const rangeSales = liveSales.filter((s) => within(s, win.start, win.end));
+  const prevSales = liveSales.filter((s) => within(s, win.prevStart, win.prevEnd));
+  const costById = useMemo(() => new Map(inventory.map((p) => [p.id, p.cost || 0])), [inventory]);
   const revenue = rangeSales.reduce((sum, s) => sum + s.total, 0);
+  const prevRevenue = prevSales.reduce((sum, s) => sum + s.total, 0);
+  const isUnpaid = (s) => s.paymentMethod === 'account' && !s.settled;
+  const unpaidInRange = rangeSales.filter(isUnpaid).reduce((sum, s) => sum + s.total, 0);
+  const owedTotal = liveSales.filter(isUnpaid).reduce((sum, s) => sum + s.total, 0);
+  const fin = summarizeProfit(rangeSales, costById);
+  const prevFin = summarizeProfit(prevSales, costById);
+  const stockAtCost = inventory.reduce((sum, p) => sum + p.stock * (p.cost || 0), 0);
+  const stockAtRetail = inventory.reduce((sum, p) => sum + p.stock * p.price, 0);
   const lowStock = inventory.filter((p) => p.stock <= p.reorderLevel);
   const expiringSoon = inventory
     .filter((p) => p.stock > 0 && daysUntilExpiry(p.expiry) !== null && daysUntilExpiry(p.expiry) <= EXPIRY_WINDOW_DAYS)
@@ -2558,10 +2602,12 @@ function DashboardTab({ inventory, sales, settings }) {
         if (!counts[item.id]) counts[item.id] = { name: item.name, qty: 0, revenue: 0 };
         counts[item.id].qty += item.qty;
         counts[item.id].revenue += item.price * item.qty;
+        const unit = Number(item.cost) > 0 ? Number(item.cost) : (costById.get(item.id) > 0 ? costById.get(item.id) : null);
+        if (unit !== null) counts[item.id].profit = (counts[item.id].profit || 0) + (item.price - unit) * item.qty;
       }
     }
     return Object.values(counts).sort((a, b) => b.qty - a.qty).slice(0, 8);
-  }, [rangeSales]);
+  }, [rangeSales, costById]);
 
   return (
     <div>
@@ -2578,15 +2624,20 @@ function DashboardTab({ inventory, sales, settings }) {
         </div>
       </div>
       <div className="pos-stat-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12, marginBottom: 24 }}>
-        <StatCard label={`Revenue ${range === 'today' ? 'today' : rangeLabel.toLowerCase()}`} value={formatMoney(revenue, settings.currency)} />
-        <StatCard label={`Transactions ${range === 'today' ? 'today' : rangeLabel.toLowerCase()}`} value={rangeSales.length} />
-        <StatCard label="Products tracked" value={inventory.length} />
+        <StatCard label={`Sales ${range === 'today' ? 'today' : rangeLabel.toLowerCase()}`} value={formatMoney(revenue, settings.currency)}
+          delta={pctChange(revenue, prevRevenue)} deltaLabel={win.prevLabel} sub={unpaidInRange > 0 ? `${formatMoney(unpaidInRange, settings.currency)} unpaid on account` : 'incl. VAT'} />
+        <StatCard label="Profit" value={fin.known ? formatMoney(fin.profit, settings.currency) : '—'} accent={fin.known ? (fin.profit < 0 ? 'var(--red)' : 'var(--pine)') : undefined}
+          delta={fin.known ? pctChange(fin.profit, prevFin.profit) : null} deltaLabel={win.prevLabel}
+          sub={!fin.known ? (fin.sales ? 'Add buying prices in Inventory' : 'excl. VAT, after buying cost') : `${fin.margin.toFixed(1)}% margin${fin.coverage < 0.99 ? ` · ${Math.round(fin.coverage * 100)}% of sales have a buying price` : ''}`} />
+        <StatCard label={`Transactions ${range === 'today' ? 'today' : rangeLabel.toLowerCase()}`} value={rangeSales.length} delta={pctChange(rangeSales.length, prevSales.length)} deltaLabel={win.prevLabel} />
+        <StatCard label="Owed by customers" value={formatMoney(owedTotal, settings.currency)} accent={owedTotal ? 'var(--amber)' : undefined} sub="unpaid account sales, all time" />
+        <StatCard label="Stock value" value={formatMoney(stockAtCost, settings.currency)} sub={`at cost · ${formatMoney(stockAtRetail, settings.currency)} at retail · ${inventory.length} products`} />
         <StatCard label="Low stock alerts" value={lowStock.length} accent={lowStock.length ? 'var(--red)' : undefined} />
-        <StatCard label="Expiring within 30d" value={expiringSoon.length} accent={expiringSoon.length ? 'var(--red)' : undefined} />
+        <StatCard label={`Expiring within ${EXPIRY_WINDOW_DAYS}d`} value={expiringSoon.length} accent={expiringSoon.length ? 'var(--red)' : undefined} />
       </div>
 
       <div className="pos-dash-columns" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
-        <RevenueTrend sales={sales} settings={settings} />
+        <RevenueTrend sales={sales} settings={settings} costById={costById} />
         <div style={{ background: 'var(--paper)', border: '1px solid var(--border)', borderRadius: 12, padding: 16, marginBottom: 20 }}>
           <h3 className="pos-serif" style={{ fontSize: 15, fontWeight: 600, marginBottom: 12 }}>{rangeLabel}'s payments</h3>
           <PaymentMethodBars sales={rangeSales} settings={settings} />
@@ -2602,7 +2653,7 @@ function DashboardTab({ inventory, sales, settings }) {
           {topSelling.map((item, i) => (
             <div key={item.name + i} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, padding: '8px 0', borderBottom: '1px solid var(--border)' }}>
               <span>{item.name}</span>
-              <span className="pos-mono" style={{ color: 'var(--muted)' }}>{item.qty} sold</span>
+              <span className="pos-mono" style={{ color: 'var(--muted)' }}>{item.qty} sold{item.profit != null ? ` · ${formatMoney(item.profit, settings.currency)} profit` : ''}</span>
             </div>
           ))}
         </div>
@@ -2620,7 +2671,7 @@ function DashboardTab({ inventory, sales, settings }) {
         </div>
         <div>
           <h3 className="pos-serif" style={{ fontSize: 15, fontWeight: 600, marginBottom: 10, display: 'flex', alignItems: 'center', gap: 6 }}>
-            <AlertTriangle size={15} color="var(--red)" /> Expiring within 30 days
+            <AlertTriangle size={15} color="var(--red)" /> Expiring within {EXPIRY_WINDOW_DAYS} days
           </h3>
           {expiringSoon.length === 0 && <p style={{ fontSize: 13, color: 'var(--muted)' }}>Nothing in stock is close to expiry.</p>}
           {expiringSoon.map((p) => {
@@ -2650,7 +2701,7 @@ function DashboardTab({ inventory, sales, settings }) {
   );
 }
 
-const emptyProduct = { name: '', category: '', sku: '', price: '', stock: '', reorderLevel: '', expiry: '', requiresRx: false };
+const emptyProduct = { name: '', category: '', sku: '', cost: '', price: '', stock: '', reorderLevel: '', expiry: '', requiresRx: false };
 
 // Builds a short, human-readable summary of what changed between two
 // versions of a product — e.g. "Stock 40 → 60, Price KSh180 → KSh190".
@@ -2713,7 +2764,7 @@ function InventoryTab({ inventory, settings, saveInventory, user, logInventoryCh
       if (sort.key === 'expiry') {
         av = a.expiry ? new Date(a.expiry).getTime() : Infinity;
         bv = b.expiry ? new Date(b.expiry).getTime() : Infinity;
-      } else if (sort.key === 'price' || sort.key === 'stock') {
+      } else if (sort.key === 'price' || sort.key === 'cost' || sort.key === 'stock') {
         av = Number(a[sort.key]); bv = Number(b[sort.key]);
       } else {
         av = String(a[sort.key] || '').toLowerCase();
@@ -2738,7 +2789,7 @@ function InventoryTab({ inventory, settings, saveInventory, user, logInventoryCh
           action: 'edit',
           productName: product.name,
           sku: product.sku,
-          detail: summarizeProductChange(before, product, settings),
+          detail: [summarizeProductChange(before, product, settings), Number(before.cost || 0) !== Number(product.cost || 0) ? 'Buying price updated' : ''].filter(Boolean).join(', '),
           before: productSnap(before), after: productSnap(product), refId: product.id,
         });
       }
@@ -2846,12 +2897,13 @@ function InventoryTab({ inventory, settings, saveInventory, user, logInventoryCh
       </div>
 
       <div className="pos-table-scroll" style={{ background: 'var(--paper)', border: '1px solid var(--border)', borderRadius: 12 }}>
-        <div style={{ minWidth: 680 }}>
-          <div style={{ display: 'grid', gridTemplateColumns: '30px 2fr 1.2fr 1fr 0.8fr 0.8fr 1fr 116px', padding: '10px 16px', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5, color: 'var(--muted)', borderBottom: '1px solid var(--border)', alignItems: 'center' }}>
+        <div style={{ minWidth: 780 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '30px 2fr 1.2fr 1fr 0.8fr 0.8fr 0.8fr 1fr 116px', padding: '10px 16px', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5, color: 'var(--muted)', borderBottom: '1px solid var(--border)', alignItems: 'center' }}>
             <input type="checkbox" checked={allVisibleSelected} onChange={toggleSelectAll} />
             <SortHeader label="Product" sortKey="name" />
             <SortHeader label="Category" sortKey="category" />
             <SortHeader label="SKU" sortKey="sku" />
+            <SortHeader label="Cost" sortKey="cost" />
             <SortHeader label="Price" sortKey="price" />
             <SortHeader label="Stock" sortKey="stock" />
             <SortHeader label="Expiry" sortKey="expiry" />
@@ -2861,11 +2913,12 @@ function InventoryTab({ inventory, settings, saveInventory, user, logInventoryCh
             const expDays = daysUntilExpiry(p.expiry);
             const expiringSoon = expDays !== null && expDays <= EXPIRY_WINDOW_DAYS;
             return (
-            <div key={p.id} style={{ display: 'grid', gridTemplateColumns: '30px 2fr 1.2fr 1fr 0.8fr 0.8fr 1fr 116px', padding: '10px 16px', fontSize: 13, borderBottom: '1px solid var(--border)', alignItems: 'center', background: selectedIds.has(p.id) ? 'var(--pine-pale)' : 'transparent' }}>
+            <div key={p.id} style={{ display: 'grid', gridTemplateColumns: '30px 2fr 1.2fr 1fr 0.8fr 0.8fr 0.8fr 1fr 116px', padding: '10px 16px', fontSize: 13, borderBottom: '1px solid var(--border)', alignItems: 'center', background: selectedIds.has(p.id) ? 'var(--pine-pale)' : 'transparent' }}>
               <input type="checkbox" checked={selectedIds.has(p.id)} onChange={() => toggleSelected(p.id)} />
               <span>{p.name}{p.requiresRx ? ' ℞' : ''}</span>
               <span style={{ color: 'var(--muted)' }}>{p.category}</span>
               <span className="pos-mono" style={{ fontSize: 12 }}>{p.sku}</span>
+              <span className="pos-mono" style={{ color: 'var(--muted)' }} title={p.cost > 0 && p.price > 0 ? `Margin ${(((p.price - p.cost) / p.price) * 100).toFixed(0)}%` : 'No buying price set'}>{p.cost > 0 ? formatMoney(p.cost, settings.currency) : '—'}</span>
               <span className="pos-mono">{formatMoney(p.price, settings.currency)}</span>
               <span style={{ color: p.stock <= p.reorderLevel ? 'var(--red)' : 'var(--ink)' }}>{p.stock}</span>
               <span style={{ color: expiringSoon ? (expDays < 0 ? 'var(--red)' : 'var(--amber)') : 'var(--muted)', fontSize: 12, fontWeight: expiringSoon ? 600 : 400 }} title={expiringSoon ? expiryLabel(expDays) : ''}>{p.expiry}</span>
@@ -3041,7 +3094,7 @@ function ProductModal({ product, onClose, onSave }) {
           </div>
         </div>
         {[
-          ['price', 'Price', 'number'], ['stock', 'Stock quantity', 'number'], ['reorderLevel', 'Reorder level', 'number'], ['expiry', 'Expiry date', 'date'],
+          ['cost', 'Buying price (cost per unit)', 'number'], ['price', 'Selling price', 'number'], ['stock', 'Stock quantity', 'number'], ['reorderLevel', 'Reorder level', 'number'], ['expiry', 'Expiry date', 'date'],
         ].map(([key, label, type]) => (
           <div key={key} style={{ marginBottom: 10 }}>
             <label style={{ fontSize: 12, color: 'var(--muted)' }}>{label}</label>
@@ -3052,7 +3105,7 @@ function ProductModal({ product, onClose, onSave }) {
         <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, marginBottom: 16 }}>
           <input type="checkbox" checked={form.requiresRx} onChange={(e) => set('requiresRx', e.target.checked)} /> Requires a prescription
         </label>
-        <button disabled={!valid} onClick={() => onSave({ ...form, price: parseFloat(form.price) || 0, stock: parseInt(form.stock) || 0, reorderLevel: parseInt(form.reorderLevel) || 0 })}
+        <button disabled={!valid} onClick={() => onSave({ ...form, cost: parseFloat(form.cost) || 0, price: parseFloat(form.price) || 0, stock: parseInt(form.stock) || 0, reorderLevel: parseInt(form.reorderLevel) || 0 })}
           style={{ width: '100%', padding: '11px 0', borderRadius: 10, border: 'none', background: valid ? 'var(--pine)' : '#B9C4B4', color: '#fff', fontWeight: 600 }}>
           Save product
         </button>
@@ -3367,7 +3420,7 @@ function SalesTab({ sales, settings, voidSale }) {
 
   const filtered = sales.filter((s) => {
     const d = new Date(s.timestamp);
-    if (from && d < new Date(from)) return false;
+    if (from && d < new Date(from + 'T00:00:00')) return false;
     if (to && d > new Date(to + 'T23:59:59')) return false;
     return true;
   }).sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
@@ -3971,7 +4024,31 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, settings.sessionTimeoutMinutes]);
 
-  const saveInventory = async (next) => {
+  // Buying prices live in a server-only table (inventory_costs), never in the
+  // anon-readable inventory table, so a till can't read them. Only an admin
+  // session fetches them, and they're merged in just for the admin console.
+  const isAdmin = !!user && user.role === 'admin';
+  const [costs, setCosts] = useState({});
+  useEffect(() => {
+    if (!isAdmin) { setCosts({}); return; }
+    let cancelled = false;
+    invokeFn('manage-inventory', { body: { token: sessionToken, action: 'list-costs' } })
+      .then(({ data }) => { if (!cancelled && data && data.costs) setCosts((prev) => ({ ...data.costs, ...prev })); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [isAdmin, inventory.length]);
+  const adminInventory = useMemo(() => inventory.map((p) => ({ ...p, cost: costs[p.id] || 0 })), [inventory, costs]);
+  const saveInventoryAdmin = (next) => {
+    const costMap = {}; const nextCosts = { ...costs };
+    for (const p of next) {
+      const c = Math.max(0, Number(p.cost) || 0);
+      if ((costs[p.id] || 0) !== c) { costMap[p.id] = c; nextCosts[p.id] = c; }
+    }
+    if (Object.keys(costMap).length) setCosts(nextCosts);
+    return saveInventory(next.map(({ cost, ...rest }) => rest), costMap); // cost never enters shared state or the local cache
+  };
+
+  const saveInventory = async (next, costMap) => {
     // Diff against what's currently loaded so InventoryTab's existing
     // "compute the whole next array" style keeps working unchanged — this
     // is the only place that translates it into the per-row calls the new
@@ -3981,8 +4058,9 @@ function App() {
     const actions = [];
     for (const [id, product] of nextById) {
       const before = prevById.get(id);
-      if (!before || JSON.stringify(before) !== JSON.stringify(product)) {
-        actions.push({ type: 'upsert', product });
+      const costChanged = !!costMap && Object.prototype.hasOwnProperty.call(costMap, id);
+      if (!before || costChanged || JSON.stringify(before) !== JSON.stringify(product)) {
+        actions.push({ type: 'upsert', product: costChanged ? { ...product, cost: costMap[id] } : product });
       }
     }
     for (const id of prevById.keys()) {
@@ -4280,9 +4358,9 @@ function App() {
 
   if (user.role === 'admin') {
     return (
-      <AdminConsole inventory={inventory} sales={sales} staffList={staffList} settings={settings}
+      <AdminConsole inventory={adminInventory} sales={sales} staffList={staffList} settings={settings}
         user={user} onLogout={handleLogout} lastSynced={lastSynced}
-        saveInventory={saveInventory} saveStaff={saveStaffList} saveSettings={saveSettingsFn}
+        saveInventory={saveInventoryAdmin} saveStaff={saveStaffList} saveSettings={saveSettingsFn}
         inventoryLog={inventoryLog} logInventoryChange={logInventoryChange}
         voidSale={voidSale} settleAccountSale={settleAccountSale} />
     );
