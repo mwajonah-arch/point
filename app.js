@@ -856,6 +856,89 @@ ${t.fontImport}
 
 @keyframes pos-spin { to { transform: rotate(360deg); } }
 
+/* ---- Checkout ---- */
+@keyframes pco-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+.pos-modal.pos-checkout {
+  width: 440px; max-width: 100%; max-height: min(92vh, 780px);
+  display: flex; flex-direction: column; overflow: hidden;
+  background: #fff; border-radius: 14px; padding: 0;
+  box-shadow: 0 18px 50px rgba(22,66,60,0.28);
+  animation: pco-in 0.18s ease-out;
+}
+.pco-head { display: flex; justify-content: space-between; align-items: flex-start; padding: 18px 20px 12px 22px; }
+.pco-form { display: flex; flex-direction: column; min-height: 0; flex: 1; margin: 0; }
+.pco-body { padding: 0 22px 18px; overflow-y: auto; flex: 1; min-height: 0; }
+.pco-foot { padding: 14px 22px 18px; border-top: 1px solid var(--border); background: var(--paper); }
+
+.pco-items { max-height: 128px; overflow-y: auto; border: 1px solid var(--border); border-radius: 10px; margin-bottom: 10px; }
+.pco-item { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; padding: 8px 12px; font-size: 13px; border-bottom: 1px solid var(--border); }
+.pco-item:last-child { border-bottom: none; }
+
+.pco-total { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; background: var(--pine); color: #fff; border-radius: 12px; padding: 14px 16px; margin-bottom: 14px; }
+
+.pco-rx { display: flex; gap: 10px; align-items: flex-start; font-size: 13px; line-height: 1.35; padding: 11px 12px; margin-bottom: 14px; border-radius: 10px; background: var(--amber-pale); border: 1px solid #E9C99C; color: #5C3A12; cursor: pointer; }
+.pco-rx input { margin-top: 2px; width: 16px; height: 16px; accent-color: var(--pine); flex-shrink: 0; }
+.pco-rx-ok { background: var(--pine-pale); border-color: #B5CBBD; color: var(--pine); }
+
+.pco-methods { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 14px; }
+.pco-method { display: flex; flex-direction: column; align-items: center; gap: 5px; padding: 11px 4px; font-size: 12.5px; font-weight: 500; border-radius: 10px; border: 1px solid var(--border); background: #fff; color: var(--ink); transition: background-color 0.12s ease, border-color 0.12s ease; }
+.pco-method:hover:not(:disabled):not([aria-checked="true"]) { background: var(--paper); border-color: #C3CCBE; }
+.pco-method[aria-checked="true"] { border-color: var(--pine); background: var(--pine-pale); color: var(--pine); font-weight: 600; box-shadow: inset 0 0 0 1px var(--pine); }
+.pco-method:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.pco-panel { padding-bottom: 2px; }
+.pco-label { display: block; font-size: 12.5px; font-weight: 500; color: var(--ink); margin-bottom: 5px; }
+.pco-input { width: 100%; padding: 11px 12px; border-radius: 9px; border: 1px solid var(--border); background: #fff; font-size: 15px; color: var(--ink); }
+.pco-input:disabled { background: var(--paper); color: var(--muted); }
+.pco-input[aria-invalid="true"] { border-color: var(--red); }
+.pco-code { font-size: 17px; letter-spacing: 2px; text-transform: uppercase; }
+.pco-code::placeholder { letter-spacing: 0; text-transform: none; font-size: 14px; }
+.pco-help { font-size: 12px; line-height: 1.4; color: var(--muted); margin: 7px 0 0; }
+.pco-msg { display: flex; align-items: flex-start; gap: 5px; font-size: 12.5px; line-height: 1.4; margin: 7px 0 0; }
+.pco-msg-bad { color: var(--red); }
+.pco-msg-ok { color: var(--pine-light); }
+.pco-msg-warn { color: #8A5314; }
+.pco-msg svg { margin-top: 2px; flex-shrink: 0; }
+.pco-result { display: flex; justify-content: space-between; font-size: 14px; font-weight: 600; margin-top: 12px; padding: 9px 12px; border-radius: 9px; background: var(--paper); }
+
+.pco-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; }
+.pco-chip { padding: 7px 11px; border-radius: 8px; border: 1px solid var(--border); background: #fff; color: var(--ink); font-size: 12.5px; font-weight: 600; }
+.pco-chip:hover { background: var(--paper); }
+.pco-chip-strong { border-color: var(--pine); background: var(--pine-pale); color: var(--pine); }
+.pco-chip-quiet { color: var(--muted); font-weight: 500; }
+
+.pco-seg { display: grid; grid-template-columns: 1fr 1fr; gap: 3px; padding: 3px; margin-bottom: 14px; border-radius: 10px; background: var(--bg); }
+.pco-seg button { padding: 8px 6px; border: none; border-radius: 8px; background: transparent; color: var(--muted); font-size: 12.5px; font-weight: 500; }
+.pco-seg button[aria-checked="true"] { background: #fff; color: var(--pine); font-weight: 600; box-shadow: 0 1px 3px rgba(22,66,60,0.16); }
+
+.pco-check { display: flex; gap: 10px; align-items: flex-start; font-size: 12.5px; line-height: 1.4; margin-top: 14px; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border); background: var(--paper); cursor: pointer; }
+.pco-check input { margin-top: 2px; width: 16px; height: 16px; accent-color: var(--pine); flex-shrink: 0; }
+.pco-check-on { border-color: #B5CBBD; background: var(--pine-pale); }
+
+.pco-wait { text-align: center; padding: 16px 0 6px; }
+.pco-wait-actions { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; margin-top: 14px; }
+.pco-spinner { width: 34px; height: 34px; margin: 0 auto 12px; border: 3px solid var(--pine-pale); border-top-color: var(--pine); border-radius: 50%; animation: pos-spin 0.8s linear infinite; }
+
+.pco-primary { width: 100%; padding: 14px 0; border: none; border-radius: 11px; background: var(--pine); color: #fff; font-size: 15px; font-weight: 600; transition: background-color 0.12s ease; }
+.pco-primary:hover:not(:disabled) { background: var(--pine-light); }
+.pco-primary:disabled { background: #B9C4B4; cursor: not-allowed; }
+
+.pco-method:focus-visible, .pco-chip:focus-visible, .pco-seg button:focus-visible, .pco-primary:focus-visible,
+.pco-input:focus-visible, .pco-rx:focus-within, .pco-check:focus-within { outline: 2px solid var(--pine-light); outline-offset: 2px; }
+
+@media (max-width: 600px) {
+  .pos-modal-backdrop.pco-backdrop { align-items: flex-end; padding: 0; }
+  .pos-modal.pos-checkout { width: 100%; max-height: 94vh; border-radius: 16px 16px 0 0; }
+  .pco-head { padding: 16px 16px 10px 18px; }
+  .pco-body { padding: 0 18px 16px; }
+  .pco-foot { padding: 12px 18px calc(14px + env(safe-area-inset-bottom, 0px)); }
+  .pco-input { font-size: 16px; } /* stops iOS zooming into the field */
+}
+@media (prefers-reduced-motion: reduce) {
+  .pos-modal.pos-checkout { animation: none; }
+  .pco-spinner { animation-duration: 2s; }
+}
+
 /* Structural classes (kept plain on desktop, overridden below on mobile) */
 .pos-topbar { display: flex; align-items: center; justify-content: space-between; padding: 14px 24px; background: var(--pine); color: #fff; flex-wrap: wrap; gap: 8px; }
 .pos-topbar-right { display: flex; align-items: center; gap: 16px; }
@@ -1534,7 +1617,7 @@ function StaffPOS({ inventory, sales, settings, user, addSale, updateStock, last
       </div>
 
       {checkoutOpen && (
-        <CheckoutModal cart={cart} subtotal={subtotal} tax={tax} total={total} settings={settings}
+        <CheckoutModal cart={cart} subtotal={subtotal} tax={tax} total={total} settings={settings} sales={sales}
           onClose={() => setCheckoutOpen(false)} onComplete={completeSale} />
       )}
       {receipt && <ReceiptModal sale={receipt} settings={settings} onClose={() => { setReceipt(null); setCartOpen(false); }} />}
@@ -1945,7 +2028,7 @@ function usePaystackCard({ amount, refPrefix, onPaid }) {
 // The card section shown under the "Card" tab (checkout) and in the account
 // settle modal. Pure presentation over the usePaystackCard state.
 function CardPaymentPanel({ card, disabled }) {
-  const btn = { width: '100%', padding: '11px 0', borderRadius: 8, border: '1px solid var(--pine)', background: '#fff', color: 'var(--pine)', fontWeight: 600, fontSize: 14 };
+  const btn = { width: '100%', padding: '13px 0', borderRadius: 11, border: 'none', background: 'var(--pine)', color: '#fff', fontWeight: 600, fontSize: 15 };
   return (
     <div style={{ marginBottom: 16 }}>
       {(card.status === 'idle' || card.status === 'starting' || card.status === 'failed') && (
@@ -1958,6 +2041,7 @@ function CardPaymentPanel({ card, disabled }) {
             style={{ ...btn, opacity: (disabled || card.status === 'starting') ? 0.5 : 1 }}>
             {card.status === 'starting' ? 'Starting…' : card.error ? 'Try again' : 'Pay by card'}
           </button>
+          {disabled && card.status === 'idle' && <p style={{ fontSize: 12, color: 'var(--muted)', textAlign: 'center', marginTop: 8 }}>Confirm the prescription check above to continue.</p>}
         </>
       )}
       {card.status === 'waiting' && (
@@ -1982,38 +2066,117 @@ function CardPaymentPanel({ card, disabled }) {
   );
 }
 
-function CheckoutModal({ cart, subtotal, tax, total, settings, onClose, onComplete }) {
+/* ---------------------------------------------------------------------- */
+/* Checkout                                                                */
+/* ---------------------------------------------------------------------- */
+
+// An M-Pesa confirmation code is always 10 upper-case letters/digits.
+const MPESA_CODE_RE = /^[A-Z0-9]{10}$/;
+
+// Sales where the customer paid straight to the till (no prompt from this app)
+// are saved with this marker in `paymentTxnId`, so reports can tell them apart
+// from payments the system confirmed itself, and they can be matched against
+// the M-Pesa statement.
+const TILL_MANUAL_FLAG = 'till-manual';
+const isManualTillSale = (sale) => !!sale && sale.paymentTxnId === TILL_MANUAL_FLAG;
+
+// 0712…, 0112…, 712…, 254712…, +254712… → "254712345678"; null if not a valid mobile number.
+function normalizeKenyaMobile(raw) {
+  let d = String(raw || '').replace(/\D/g, '');
+  if (d.startsWith('254')) d = d.slice(3);
+  else if (d.startsWith('0')) d = d.slice(1);
+  return /^[17]\d{8}$/.test(d) ? '254' + d : null;
+}
+
+function CheckoutModal({ cart, subtotal, tax, total, settings, sales = [], onClose, onComplete }) {
+  const currency = settings.currency;
+  const money = (n) => formatMoney(n, currency);
+
   const [method, setMethod] = useState('cash');
-  const [tendered, setTendered] = useState('');
   const [rxConfirmed, setRxConfirmed] = useState(false);
+
+  // cash
+  const [tendered, setTendered] = useState('');
+
+  // account
+  const [customerName, setCustomerName] = useState('');
+  const [customerPhone, setCustomerPhone] = useState('');
+
+  // M-Pesa: either send the customer a prompt, or record a payment they already made to the till
+  const [mpesaMode, setMpesaMode] = useState('prompt'); // prompt | till
   const [mpesaPhone, setMpesaPhone] = useState('');
   const [mpesaStatus, setMpesaStatus] = useState('idle'); // idle | sending | waiting | success | failed | timeout
   const [mpesaError, setMpesaError] = useState('');
   const [mpesaReceipt, setMpesaReceipt] = useState(null);
   const [mpesaTxnId, setMpesaTxnId] = useState(null);
-  const [customerName, setCustomerName] = useState('');
-  const [customerPhone, setCustomerPhone] = useState('');
+  const [tillCode, setTillCode] = useState('');
+  const [tillAmount, setTillAmount] = useState(String(total));
+  const [tillChecked, setTillChecked] = useState(false);
+
   const pollTimer = useRef(null);
+  const doneRef = useRef(false);
+
   const needsRx = cart.some((i) => i.requiresRx);
+  const rxBlocked = needsRx && !rxConfirmed;
+  const itemCount = cart.reduce((n, i) => n + i.qty, 0);
+
+  // A sale can only ever be completed once, whatever fires first (double-click,
+  // a late payment confirmation, Enter pressed twice…).
+  const finish = (payment) => {
+    if (doneRef.current) return;
+    doneRef.current = true;
+    onComplete(payment);
+  };
+
   const card = usePaystackCard({
     amount: total, refPrefix: 'POS',
-    onPaid: (paymentRef) => onComplete({ method: 'card', tendered: total, change: 0, paymentRef }),
+    onPaid: (paymentRef) => finish({ method: 'card', tendered: total, change: 0, paymentRef }),
   });
-  const tenderedNum = parseFloat(tendered) || 0;
-  const change = method === 'cash' ? Math.max(0, tenderedNum - total) : 0;
-  const canComplete = (!needsRx || rxConfirmed) && (method !== 'cash' || tenderedNum >= total) && (method !== 'account' || customerName.trim().length > 0);
 
-  useEffect(() => () => { if (pollTimer.current) clearInterval(pollTimer.current); }, []);
+  const stopPolling = () => { if (pollTimer.current) { clearInterval(pollTimer.current); pollTimer.current = null; } };
+  useEffect(() => stopPolling, []);
 
-  // Once M-Pesa confirms payment, finish the sale automatically.
+  // Once M-Pesa confirms a prompted payment, finish the sale automatically.
+  // (Deliberately not tied to the selected tab: if the cashier clicked away
+  // while waiting, a paid request must still become a sale.)
   useEffect(() => {
-    if (method === 'mpesa' && mpesaStatus === 'success') {
-      onComplete({ method: 'mpesa', tendered: total, change: 0, mpesaReceipt, paymentTxnId: mpesaTxnId });
+    if (mpesaStatus === 'success') {
+      finish({ method: 'mpesa', tendered: total, change: 0, mpesaReceipt, paymentTxnId: mpesaTxnId });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mpesaStatus]);
 
+  /* ----- closing: warn if a payment is still in flight ----- */
+  const paymentInFlight = mpesaStatus === 'waiting' || mpesaStatus === 'timeout' || card.status === 'waiting';
+  const requestClose = () => {
+    if (paymentInFlight && !window.confirm(
+      'A payment is still in progress.\n\nIf you close now and the customer pays, no sale will be recorded for it. Close anyway?'
+    )) return;
+    stopPolling();
+    if (card.status === 'waiting') card.cancel();
+    onClose();
+  };
+  const closeRef = useRef(requestClose);
+  closeRef.current = requestClose;
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === 'Escape') closeRef.current(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  // Don't let the cashier hop to another tab while a request is out.
+  const methodsLocked = paymentInFlight || mpesaStatus === 'sending' || card.status === 'starting';
+
+  /* ----- cash ----- */
+  const tenderedNum = parseFloat(tendered) || 0;
+  const change = method === 'cash' ? Math.max(0, tenderedNum - total) : 0;
+
+  /* ----- M-Pesa prompt ----- */
+  const phoneOk = !!normalizeKenyaMobile(mpesaPhone);
+  const phoneLooksDone = mpesaPhone.replace(/\D/g, '').length >= 9;
+
   const watchMpesaStatus = (checkoutRequestId) => {
+    stopPolling();
     let attempts = 0;
     pollTimer.current = setInterval(async () => {
       attempts += 1;
@@ -2023,7 +2186,7 @@ function CheckoutModal({ cart, subtotal, tax, total, settings, onClose, onComple
           .eq('checkout_request_id', checkoutRequestId)
           .maybeSingle();
         if (data && data.status !== 'pending') {
-          clearInterval(pollTimer.current);
+          stopPolling();
           if (data.status === 'success') {
             setMpesaReceipt(data.mpesa_receipt);
             setMpesaTxnId(checkoutRequestId);
@@ -2035,27 +2198,23 @@ function CheckoutModal({ cart, subtotal, tax, total, settings, onClose, onComple
           return;
         }
       } catch (e) { /* keep polling */ }
-      // Safaricom's async callback is reliable for a successful payment,
-      // but frequently never arrives at all when the customer cancels or
-      // enters the wrong PIN — which otherwise left this stuck on "still
-      // waiting" forever. Every ~6s, actively ask Safaricom directly as a
-      // fallback. It only ever resolves the failure side (see
-      // mpesa-stk-query) — a real success still gets its receipt from the
-      // callback on the next DB poll above, so this never races it.
+      // Safaricom's async callback is reliable for a successful payment, but
+      // frequently never arrives when the customer cancels or enters a wrong
+      // PIN. Every ~6s, ask the payment provider directly as a fallback.
       if (attempts % 3 === 0) {
         try {
           const { data: queryData } = await invokeFn(MPESA_QUERY_FN, {
             body: { token: sessionToken, checkoutRequestId },
           });
           if (queryData && queryData.status === 'success' && PAYMENT_PROVIDER === 'paystack') {
-            clearInterval(pollTimer.current);
+            stopPolling();
             setMpesaReceipt(queryData.receipt || null);
             setMpesaTxnId(checkoutRequestId);
             setMpesaStatus('success');
             return;
           }
           if (queryData && queryData.status === 'failed') {
-            clearInterval(pollTimer.current);
+            stopPolling();
             setMpesaError(queryData.resultDesc || 'The customer did not complete the payment.');
             setMpesaStatus('failed');
             return;
@@ -2063,7 +2222,7 @@ function CheckoutModal({ cart, subtotal, tax, total, settings, onClose, onComple
         } catch (e) { /* keep polling */ }
       }
       if (attempts >= 30) { // ~60 seconds
-        clearInterval(pollTimer.current);
+        stopPolling();
         setMpesaStatus((s) => (s === 'waiting' ? 'timeout' : s));
       }
     }, 2000);
@@ -2075,7 +2234,7 @@ function CheckoutModal({ cart, subtotal, tax, total, settings, onClose, onComple
     const saleRef = 'POS' + Date.now().toString().slice(-8);
     try {
       const { data, error } = await invokeFn(MPESA_PUSH_FN, {
-        body: { token: sessionToken, phone: mpesaPhone, amount: total, saleRef },
+        body: { token: sessionToken, phone: mpesaPhone.trim(), amount: total, saleRef },
       });
       if (error || !data || data.error) {
         setMpesaStatus('failed');
@@ -2090,154 +2249,275 @@ function CheckoutModal({ cart, subtotal, tax, total, settings, onClose, onComple
     }
   };
 
+  const cancelMpesaRequest = () => {
+    stopPolling();
+    setMpesaError('');
+    setMpesaStatus('idle');
+  };
+
+  const switchToTill = () => {
+    cancelMpesaRequest();
+    setMpesaMode('till');
+  };
+
+  /* ----- M-Pesa: customer already paid the till ----- */
+  const code = tillCode.trim().toUpperCase();
+  const codeFormatOk = MPESA_CODE_RE.test(code);
+  const usedSale = useMemo(() => {
+    if (!codeFormatOk) return null;
+    return sales.find((s) => [s.mpesaReceipt, s.paymentRef].some((r) => r && String(r).toUpperCase() === code)) || null;
+  }, [code, codeFormatOk, sales]);
+  const paidNum = parseFloat(tillAmount) || 0;
+  const shortBy = Math.max(0, total - paidNum);
+  const overBy = Math.max(0, paidNum - total);
+  const amountOk = paidNum > 0 && shortBy < 0.005;
+  const tillReady = codeFormatOk && !usedSale && amountOk && tillChecked;
+
+  const recordTillPayment = () => finish({
+    method: 'mpesa', tendered: paidNum, change: 0, mpesaReceipt: code, paymentTxnId: TILL_MANUAL_FLAG,
+  });
+
+  /* ----- the one primary action in the footer ----- */
+  let primary = null;
+  if (method === 'cash') {
+    primary = {
+      label: change > 0 ? 'Complete sale — give ' + money(change) + ' change' : 'Complete sale',
+      disabled: rxBlocked || tenderedNum < total || tenderedNum <= 0,
+      onClick: () => finish({ method: 'cash', tendered: tenderedNum, change }),
+    };
+  } else if (method === 'account') {
+    primary = {
+      label: 'Put on account',
+      disabled: rxBlocked || customerName.trim().length === 0,
+      onClick: () => finish({ method: 'account', tendered: total, change: 0, customerName: customerName.trim(), customerPhone: customerPhone.trim() }),
+    };
+  } else if (method === 'mpesa' && mpesaMode === 'till') {
+    primary = { label: 'Record M-Pesa payment', disabled: rxBlocked || !tillReady, onClick: recordTillPayment };
+  } else if (method === 'mpesa') {
+    if (mpesaStatus === 'idle' || mpesaStatus === 'failed') {
+      primary = { label: mpesaError ? 'Try again' : 'Send payment request', disabled: rxBlocked || !phoneOk, onClick: sendMpesaRequest };
+    } else if (mpesaStatus === 'sending') {
+      primary = { label: 'Sending request…', disabled: true, onClick: () => {} };
+    } else if (mpesaStatus === 'timeout') {
+      primary = { label: 'Resend request', disabled: false, onClick: sendMpesaRequest };
+    } else if (mpesaStatus === 'waiting') {
+      primary = { label: 'Waiting for payment…', disabled: true, onClick: () => {} };
+    } else {
+      primary = { label: 'Payment received', disabled: true, onClick: () => {} };
+    }
+  }
+  const primaryHint = primary && primary.disabled && rxBlocked ? 'Confirm the prescription check above to continue.' : '';
+
+  const methods = [
+    { key: 'cash', label: 'Cash', Icon: Banknote },
+    { key: 'card', label: 'Card', Icon: CreditCard },
+    { key: 'mpesa', label: 'M-Pesa', Icon: Smartphone },
+    { key: 'account', label: 'On account', Icon: Users },
+  ];
+
+  const showModeSwitch = method === 'mpesa' && (mpesaStatus === 'idle' || mpesaStatus === 'failed') ;
+
   return (
-    <div className="pos-modal-backdrop">
-      <div className="pos-modal" style={{ background: '#fff', borderRadius: 14, padding: 24, maxHeight: '90vh', overflowY: 'auto' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-          <span className="pos-serif" style={{ fontSize: 18, fontWeight: 700 }}>Complete sale</span>
-          <button className="pos-icon-btn" onClick={onClose} title="Close" style={{ color: 'var(--muted)' }}><X size={18} /></button>
+    <div className="pos-modal-backdrop pco-backdrop">
+      <div className="pos-modal pos-checkout" role="dialog" aria-modal="true" aria-labelledby="pco-title">
+        <div className="pco-head">
+          <div>
+            <div id="pco-title" className="pos-serif" style={{ fontSize: 20, fontWeight: 700, lineHeight: 1.15 }}>Complete sale</div>
+            <div style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: 3 }}>{itemCount} item{itemCount !== 1 ? 's' : ''} in this sale</div>
+          </div>
+          <button type="button" className="pos-icon-btn" onClick={requestClose} title="Close" aria-label="Close checkout" style={{ color: 'var(--muted)' }}><X size={18} /></button>
         </div>
 
-        <div className="pos-scroll" style={{ maxHeight: 160, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 10, marginBottom: 14 }}>
-          {cart.map((i, idx) => (
-            <div key={i.id} style={{
-              display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10,
-              padding: '8px 12px', fontSize: 12.5, borderBottom: idx < cart.length - 1 ? '1px solid var(--border)' : 'none'
-            }}>
-              <span style={{ flex: 1 }}>
-                {i.name}{i.requiresRx ? ' ℞' : ''}
-                <span className="pos-mono" style={{ color: 'var(--muted)', marginLeft: 6 }}>×{i.qty}</span>
-              </span>
-              <span className="pos-mono" style={{ whiteSpace: 'nowrap' }}>{formatMoney(i.price * i.qty, settings.currency)}</span>
-            </div>
-          ))}
-        </div>
+        <form className="pco-form" onSubmit={(e) => { e.preventDefault(); if (primary && !primary.disabled) primary.onClick(); }}>
+          <div className="pco-body pos-scroll">
 
-        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 20, fontWeight: 700, marginBottom: 16 }}>
-          <span className="pos-serif">Total due</span>
-          <span className="pos-mono">{formatMoney(total, settings.currency)}</span>
-        </div>
-
-        <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
-          {[
-            { key: 'cash', label: 'Cash', Icon: Banknote },
-            { key: 'card', label: 'Card', Icon: CreditCard },
-            { key: 'mpesa', label: 'M-Pesa', Icon: Smartphone },
-            { key: 'account', label: 'On account', Icon: Users },
-          ].map(({ key, label, Icon }) => (
-            <button key={key} onClick={() => setMethod(key)} style={{
-              flex: '1 1 70px', padding: '10px 0', borderRadius: 10, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4,
-              border: method === key ? '1px solid var(--pine)' : '1px solid var(--border)',
-              background: method === key ? 'var(--pine-pale)' : '#fff', color: method === key ? 'var(--pine)' : 'var(--ink)', fontSize: 12, fontWeight: 500
-            }}><Icon size={16} />{label}</button>
-          ))}
-        </div>
-
-        {method === 'cash' && (
-          <div style={{ marginBottom: 16 }}>
-            <label style={{ fontSize: 12, color: 'var(--muted)' }}>Amount tendered</label>
-            <input type="number" value={tendered} onChange={(e) => setTendered(e.target.value)} placeholder={formatMoney(total, settings.currency)}
-              style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 15, marginTop: 4 }} />
-            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
-              {[50, 100, 200, 500, 1000].map((amt) => (
-                <button key={amt} type="button" onClick={() => setTendered((t) => String((parseFloat(t) || 0) + amt))}
-                  style={{ padding: '6px 10px', borderRadius: 7, border: '1px solid var(--border)', background: '#fff', color: 'var(--ink)', fontSize: 12, fontWeight: 600 }}>
-                  +{settings.currency} {amt}
-                </button>
+            {/* What's being bought */}
+            <div className="pco-items pos-scroll">
+              {cart.map((i) => (
+                <div key={i.id} className="pco-item">
+                  <span style={{ flex: 1, minWidth: 0 }}>
+                    {i.name}{i.requiresRx ? ' ℞' : ''}
+                    <span className="pos-mono" style={{ color: 'var(--muted)', marginLeft: 6 }}>×{i.qty}</span>
+                  </span>
+                  <span className="pos-mono" style={{ whiteSpace: 'nowrap' }}>{money(i.price * i.qty)}</span>
+                </div>
               ))}
-              <button type="button" onClick={() => setTendered(String(total))}
-                style={{ padding: '6px 10px', borderRadius: 7, border: '1px solid var(--pine)', background: 'var(--pine-pale)', color: 'var(--pine)', fontSize: 12, fontWeight: 600 }}>
-                Exact amount
-              </button>
-              {tendered !== '' && (
-                <button type="button" onClick={() => setTendered('')}
-                  style={{ padding: '6px 10px', borderRadius: 7, border: '1px solid var(--border)', background: '#fff', color: 'var(--muted)', fontSize: 12 }}>
-                  Clear
-                </button>
+              {tax > 0 && (
+                <div className="pco-item" style={{ color: 'var(--muted)' }}>
+                  <span style={{ flex: 1 }}>Subtotal {money(subtotal)} + tax ({settings.taxRate}%)</span>
+                  <span className="pos-mono">{money(tax)}</span>
+                </div>
               )}
             </div>
-            {tenderedNum > 0 && (
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, marginTop: 8, color: tenderedNum < total ? 'var(--red)' : 'var(--muted)' }}>
-                <span>{tenderedNum < total ? 'Insufficient amount' : 'Change due'}</span>
-                <span className="pos-mono">{tenderedNum < total ? '' : formatMoney(change, settings.currency)}</span>
-              </div>
-            )}
-          </div>
-        )}
 
-        {method === 'account' && (
-          <div style={{ marginBottom: 16 }}>
-            <label style={{ fontSize: 12, color: 'var(--muted)' }}>Customer name</label>
-            <input value={customerName} onChange={(e) => setCustomerName(e.target.value)} placeholder="e.g. Wanjiku Kamau"
-              style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 15, marginTop: 4, marginBottom: 10 }} />
-            <label style={{ fontSize: 12, color: 'var(--muted)' }}>Phone (optional)</label>
-            <input value={customerPhone} onChange={(e) => setCustomerPhone(e.target.value)} placeholder="07XX XXX XXX" inputMode="tel"
-              style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 15, marginTop: 4 }} />
-            <p style={{ fontSize: 11.5, color: 'var(--muted)', marginTop: 8 }}>This sale will be recorded as unpaid on the customer's account until it's settled from the Accounts tab.</p>
-          </div>
-        )}
+            <div className="pco-total">
+              <span className="pos-serif" style={{ fontSize: 16, opacity: 0.9 }}>Total due</span>
+              <span className="pos-mono" style={{ fontSize: 28, fontWeight: 500, letterSpacing: -0.5 }}>{money(total)}</span>
+            </div>
 
-        {method === 'mpesa' && (
-          <div style={{ marginBottom: 16 }}>
-            {(mpesaStatus === 'idle' || mpesaStatus === 'sending' || mpesaStatus === 'failed') && (
-              <>
-                <label style={{ fontSize: 12, color: 'var(--muted)' }}>Customer's M-Pesa number</label>
-                <input value={mpesaPhone} onChange={(e) => setMpesaPhone(e.target.value)} placeholder="07XX XXX XXX" inputMode="tel"
-                  style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 15, marginTop: 4 }} />
-                {mpesaError && <p style={{ color: 'var(--red)', fontSize: 12, marginTop: 8 }}>{mpesaError}</p>}
-                <button type="button" onClick={sendMpesaRequest}
-                  disabled={!mpesaPhone || mpesaStatus === 'sending' || (needsRx && !rxConfirmed)}
-                  style={{
-                    marginTop: 10, width: '100%', padding: '11px 0', borderRadius: 8,
-                    border: '1px solid var(--pine)', background: '#fff', color: 'var(--pine)', fontWeight: 600, fontSize: 14,
-                    opacity: (!mpesaPhone || mpesaStatus === 'sending' || (needsRx && !rxConfirmed)) ? 0.5 : 1
-                  }}>
-                  {mpesaStatus === 'sending' ? 'Sending request…' : mpesaError ? 'Try again' : 'Send payment request'}
-                </button>
-              </>
+            {needsRx && (
+              <label className={'pco-rx' + (rxConfirmed ? ' pco-rx-ok' : '')}>
+                <input type="checkbox" checked={rxConfirmed} onChange={(e) => setRxConfirmed(e.target.checked)} />
+                <span>
+                  <b>I've seen a valid prescription for the ℞ items.</b>
+                  <span style={{ display: 'block', fontSize: 11.5, opacity: 0.85, marginTop: 1 }}>Payment is locked until this is ticked.</span>
+                </span>
+              </label>
             )}
-            {(mpesaStatus === 'waiting' || mpesaStatus === 'timeout') && (
-              <div style={{ textAlign: 'center', padding: '14px 0' }}>
-                <div style={{ width: 34, height: 34, margin: '0 auto 10px', border: '3px solid var(--pine-pale)', borderTopColor: 'var(--pine)', borderRadius: '50%', animation: 'pos-spin 0.8s linear infinite' }} />
-                <p style={{ fontSize: 13, marginBottom: 4 }}>
-                  {mpesaStatus === 'timeout' ? 'Still waiting — ask the customer to check their phone.' : `A prompt was sent to ${mpesaPhone}.`}
-                </p>
-                <p style={{ fontSize: 12, color: 'var(--muted)' }}>Ask them to enter their M-Pesa PIN to complete the payment.</p>
-                {mpesaStatus === 'timeout' && (
-                  <button type="button" onClick={sendMpesaRequest} style={{ marginTop: 10, padding: '8px 14px', borderRadius: 8, border: '1px solid var(--pine)', background: '#fff', color: 'var(--pine)', fontSize: 13 }}>
-                    Resend request
+
+            {/* How they're paying */}
+            <div className="pco-methods" role="radiogroup" aria-label="Payment method">
+              {methods.map(({ key, label, Icon }) => {
+                const selected = method === key;
+                return (
+                  <button key={key} type="button" role="radio" aria-checked={selected}
+                    className="pco-method" disabled={methodsLocked && !selected}
+                    onClick={() => setMethod(key)}>
+                    <Icon size={18} />
+                    <span>{label}</span>
                   </button>
+                );
+              })}
+            </div>
+
+            {/* ---------------- Cash ---------------- */}
+            {method === 'cash' && (
+              <div className="pco-panel">
+                <label className="pco-label" htmlFor="pco-tendered">Amount received</label>
+                <input id="pco-tendered" className="pco-input pos-mono" type="number" inputMode="decimal" min="0" step="any" autoFocus
+                  value={tendered} onChange={(e) => setTendered(e.target.value)} placeholder={money(total)} />
+                <div className="pco-chips">
+                  <button type="button" className="pco-chip pco-chip-strong" onClick={() => setTendered(String(total))}>Exact amount</button>
+                  {[50, 100, 200, 500, 1000].map((amt) => (
+                    <button key={amt} type="button" className="pco-chip" onClick={() => setTendered((t) => String((parseFloat(t) || 0) + amt))}>+{amt}</button>
+                  ))}
+                  {tendered !== '' && <button type="button" className="pco-chip pco-chip-quiet" onClick={() => setTendered('')}>Clear</button>}
+                </div>
+                {tenderedNum > 0 && (
+                  <div className="pco-result" style={{ color: tenderedNum < total ? 'var(--red)' : 'var(--pine)' }}>
+                    <span>{tenderedNum < total ? 'Still to pay' : 'Change to give'}</span>
+                    <span className="pos-mono">{tenderedNum < total ? money(total - tenderedNum) : money(change)}</span>
+                  </div>
                 )}
               </div>
             )}
-            {mpesaStatus === 'success' && (
-              <div style={{ textAlign: 'center', padding: '10px 0', color: 'var(--pine)' }}>
-                <CheckCircle size={24} style={{ marginBottom: 6 }} />
-                <p style={{ fontSize: 13, fontWeight: 600 }}>Payment received{mpesaReceipt ? ` — ${mpesaReceipt}` : ''}</p>
+
+            {/* ---------------- On account ---------------- */}
+            {method === 'account' && (
+              <div className="pco-panel">
+                <label className="pco-label" htmlFor="pco-cname">Customer name</label>
+                <input id="pco-cname" className="pco-input" autoFocus value={customerName} onChange={(e) => setCustomerName(e.target.value)} placeholder="e.g. Wanjiku Kamau" />
+                <label className="pco-label" htmlFor="pco-cphone" style={{ marginTop: 12 }}>Phone (optional)</label>
+                <input id="pco-cphone" className="pco-input" value={customerPhone} onChange={(e) => setCustomerPhone(e.target.value)} placeholder="07XX XXX XXX" inputMode="tel" />
+                <p className="pco-help">Recorded as unpaid on the customer's account until it's settled from the Accounts tab.</p>
+              </div>
+            )}
+
+            {/* ---------------- M-Pesa ---------------- */}
+            {method === 'mpesa' && (
+              <div className="pco-panel">
+                {showModeSwitch && (
+                  <div className="pco-seg" role="radiogroup" aria-label="How the customer pays">
+                    <button type="button" role="radio" aria-checked={mpesaMode === 'prompt'} onClick={() => setMpesaMode('prompt')}>Send payment request</button>
+                    <button type="button" role="radio" aria-checked={mpesaMode === 'till'} onClick={() => setMpesaMode('till')}>Already paid at till</button>
+                  </div>
+                )}
+
+                {/* prompt mode: entering the number */}
+                {mpesaMode === 'prompt' && (mpesaStatus === 'idle' || mpesaStatus === 'sending' || mpesaStatus === 'failed') && (
+                  <>
+                    <label className="pco-label" htmlFor="pco-phone">Customer's M-Pesa number</label>
+                    <input id="pco-phone" className="pco-input pos-mono" autoFocus inputMode="tel" autoComplete="off"
+                      value={mpesaPhone} onChange={(e) => { setMpesaPhone(e.target.value); if (mpesaError) setMpesaError(''); }}
+                      placeholder="07XX XXX XXX" disabled={mpesaStatus === 'sending'}
+                      aria-invalid={phoneLooksDone && !phoneOk} />
+                    {mpesaError
+                      ? <p className="pco-msg pco-msg-bad" role="alert">{mpesaError}</p>
+                      : phoneLooksDone && !phoneOk
+                        ? <p className="pco-msg pco-msg-bad">That doesn't look like a Kenyan mobile number. Try 0712 345 678.</p>
+                        : <p className="pco-help">They'll get a PIN prompt for {money(total)} on this phone.</p>}
+                  </>
+                )}
+
+                {/* prompt mode: waiting for the customer */}
+                {mpesaMode === 'prompt' && (mpesaStatus === 'waiting' || mpesaStatus === 'timeout') && (
+                  <div className="pco-wait">
+                    <div className="pco-spinner" aria-hidden="true" />
+                    <p style={{ fontSize: 14, fontWeight: 600, marginBottom: 3 }}>
+                      {mpesaStatus === 'timeout' ? 'No answer yet' : 'Prompt sent to ' + mpesaPhone}
+                    </p>
+                    <p style={{ fontSize: 12.5, color: 'var(--muted)', maxWidth: 300, margin: '0 auto' }}>
+                      {mpesaStatus === 'timeout'
+                        ? 'Ask the customer to check their phone. If they say they already paid the till, record it instead.'
+                        : 'Ask them to enter their M-Pesa PIN. The sale completes by itself when the payment lands.'}
+                    </p>
+                    <div className="pco-wait-actions">
+                      {mpesaStatus === 'timeout' && <button type="button" className="pco-chip pco-chip-strong" onClick={switchToTill}>They paid the till</button>}
+                      <button type="button" className="pco-chip pco-chip-quiet" onClick={cancelMpesaRequest}>Cancel request</button>
+                    </div>
+                  </div>
+                )}
+
+                {mpesaMode === 'prompt' && mpesaStatus === 'success' && (
+                  <div className="pco-wait" style={{ color: 'var(--pine)' }}>
+                    <CheckCircle size={28} style={{ marginBottom: 6 }} />
+                    <p style={{ fontSize: 14, fontWeight: 600 }}>Payment received{mpesaReceipt ? ' — ' + mpesaReceipt : ''}</p>
+                  </div>
+                )}
+
+                {/* till mode: customer already paid */}
+                {mpesaMode === 'till' && (
+                  <>
+                    <p className="pco-help" style={{ marginTop: 0, marginBottom: 12 }}>
+                      Use this when the customer paid your till before you sent a request. Don't send a prompt as well, or they'll pay twice.
+                    </p>
+
+                    <label className="pco-label" htmlFor="pco-code">M-Pesa confirmation code</label>
+                    <input id="pco-code" className="pco-input pos-mono pco-code" autoFocus autoComplete="off" autoCapitalize="characters" spellCheck={false}
+                      maxLength={10} value={tillCode} placeholder="e.g. SGH7K2L9QX"
+                      onChange={(e) => setTillCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ''))}
+                      aria-invalid={code.length === 10 && (!codeFormatOk || !!usedSale)} />
+                    {usedSale ? (
+                      <p className="pco-msg pco-msg-bad" role="alert">
+                        This code is already on a sale{usedSale.timestamp ? ' from ' + new Date(usedSale.timestamp).toLocaleString() : ''}{usedSale.cashier ? ' (' + usedSale.cashier + ')' : ''}. Each payment can only be used once.
+                      </p>
+                    ) : codeFormatOk ? (
+                      <p className="pco-msg pco-msg-ok"><Check size={13} /> Code format is right and it hasn't been used on another sale.</p>
+                    ) : (
+                      <p className="pco-help">{code.length}/10 — the 10 letters and numbers at the start of the M-Pesa message.</p>
+                    )}
+
+                    <label className="pco-label" htmlFor="pco-paid" style={{ marginTop: 12 }}>Amount received</label>
+                    <input id="pco-paid" className="pco-input pos-mono" type="number" inputMode="decimal" min="0" step="any"
+                      value={tillAmount} onChange={(e) => setTillAmount(e.target.value)} />
+                    {shortBy >= 0.005 && <p className="pco-msg pco-msg-bad">Short by {money(shortBy)}. The full {money(total)} must be received to complete this sale.</p>}
+                    {overBy >= 0.005 && <p className="pco-msg pco-msg-warn">{money(overBy)} more than the total was paid. The sale is recorded at {money(total)}; sort out the difference with the customer.</p>}
+
+                    <label className={'pco-check' + (tillChecked ? ' pco-check-on' : '')}>
+                      <input type="checkbox" checked={tillChecked} onChange={(e) => setTillChecked(e.target.checked)} />
+                      <span>I've confirmed this payment on the till's phone or M-Pesa statement, not only from the customer's message.</span>
+                    </label>
+                    <p className="pco-help">Saved as a manual till payment so it can be matched against your M-Pesa statement later.</p>
+                  </>
+                )}
+              </div>
+            )}
+
+            {/* ---------------- Card ---------------- */}
+            {method === 'card' && (
+              <div className="pco-panel">
+                <CardPaymentPanel card={card} disabled={rxBlocked} />
               </div>
             )}
           </div>
-        )}
 
-        {method === 'card' && <CardPaymentPanel card={card} disabled={needsRx && !rxConfirmed} />}
-
-        {needsRx && (
-          <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 12, marginBottom: 16, padding: 10, background: 'var(--amber-pale)', borderRadius: 8, color: '#5C3A12' }}>
-            <input type="checkbox" checked={rxConfirmed} onChange={(e) => setRxConfirmed(e.target.checked)} style={{ marginTop: 2 }} />
-            I have verified a valid prescription for the item(s) marked ℞.
-          </label>
-        )}
-
-        {method !== 'mpesa' && method !== 'card' && (
-          <button onClick={() => onComplete({
-            method, tendered: method === 'cash' ? tenderedNum : total, change,
-            customerName: method === 'account' ? customerName.trim() : undefined,
-            customerPhone: method === 'account' ? customerPhone.trim() : undefined,
-          })} disabled={!canComplete} style={{
-            width: '100%', padding: '12px 0', borderRadius: 10, border: 'none', fontWeight: 600, fontSize: 15,
-            background: canComplete ? 'var(--pine)' : '#B9C4B4', color: '#fff'
-          }}>Confirm payment</button>
-        )}
+          {primary && (
+            <div className="pco-foot">
+              <button type="submit" className="pco-primary" disabled={primary.disabled}>{primary.label}</button>
+              {primaryHint && <p className="pco-help" style={{ textAlign: 'center', marginTop: 8 }}>{primaryHint}</p>}
+            </div>
+          )}
+        </form>
       </div>
     </div>
   );
@@ -2481,7 +2761,7 @@ function ReceiptModal({ sale, settings, onClose }) {
           <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--muted)' }}><span>Change</span><span>{formatMoney(sale.change, settings.currency)}</span></div>
         )}
         {sale.paymentMethod === 'mpesa' && sale.mpesaReceipt && (
-          <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--muted)' }}><span>M-Pesa receipt</span><span>{sale.mpesaReceipt}</span></div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--muted)' }}><span>M-Pesa receipt{isManualTillSale(sale) ? ' (paid at till)' : ''}</span><span>{sale.mpesaReceipt}</span></div>
         )}
         {sale.paymentMethod === 'card' && sale.paymentRef && (
           <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--muted)', gap: 10 }}><span>Card ref</span><span style={{ wordBreak: 'break-all', textAlign: 'right' }}>{sale.paymentRef}</span></div>
@@ -3668,6 +3948,7 @@ const ACTIVITY_KIND_META = {
   void:   { label: 'Sale voided',  color: 'var(--red)',   bg: 'var(--red-pale)',  Icon: X,             loud: true },
   settle: { label: 'Account paid', color: 'var(--pine)',  bg: 'var(--pine-pale)', Icon: CheckCircle,   loud: false },
   reject: { label: 'Not saved',    color: 'var(--red)',   bg: 'var(--red-pale)',  Icon: AlertTriangle, loud: true },
+  till:   { label: 'Paid at till', color: 'var(--amber)', bg: 'var(--amber-pale)', Icon: Smartphone,   loud: true },
 };
 // Kept for any older code that still refers to it.
 const ACTIVITY_ACTION_META = ACTIVITY_KIND_META;
@@ -3779,9 +4060,11 @@ function ActivityTab({ inventoryLog, settings }) {
   const todays = all.filter((e) => localDateStr(new Date(e.timestamp)) === todayKey);
   const countKind = (k) => todays.filter((e) => activityKind(e) === k);
   const todayVoids = countKind('void');
+  const todayTill = countKind('till');
   const attention = [
     { kind: 'void', label: 'Voids today', value: todayVoids.length, sub: todayVoids.length ? formatMoney(todayVoids.reduce((s, e) => s + (Number(e.amount) || 0), 0), currency) : 'none', warn: todayVoids.length > 0 },
     { kind: 'reject', label: 'Sales not saved', value: countKind('reject').length, sub: 'payment refused', warn: countKind('reject').length > 0 },
+    { kind: 'till', label: 'Paid at till today', value: todayTill.length, sub: todayTill.length ? formatMoney(todayTill.reduce((n, e) => n + (Number(e.amount) || 0), 0), currency) + ' to match' : 'none', warn: todayTill.length > 0 },
     { kind: 'price', label: 'Price changes', value: countKind('price').length, sub: 'today', warn: false },
     { kind: 'delete', label: 'Deletions', value: countKind('delete').length, sub: 'today', warn: countKind('delete').length > 0 },
   ];
@@ -4125,7 +4408,7 @@ function SalesTab({ sales, inventory, settings, voidSale }) {
                           <span>{i.qty} x {i.name}</span><span className="pos-mono">{formatMoney(i.price * i.qty, currency)}</span>
                         </div>
                       ))}
-                      <div style={{ marginTop: 4 }}>Rung up by {s.cashier} · paid via {PAYMENT_LABELS[s.paymentMethod] || s.paymentMethod}{s.customerName ? ` — ${s.customerName}` : ''}{s.mpesaReceipt ? ` (${s.mpesaReceipt})` : ''}{s.paymentRef ? ` (${s.paymentRef})` : ''}</div>
+                      <div style={{ marginTop: 4 }}>Rung up by {s.cashier} · paid via {PAYMENT_LABELS[s.paymentMethod] || s.paymentMethod}{s.customerName ? ` — ${s.customerName}` : ''}{s.mpesaReceipt ? ` (${s.mpesaReceipt})` : ''}{isManualTillSale(s) ? ' — paid at till, entered by hand' : ''}{s.paymentRef ? ` (${s.paymentRef})` : ''}</div>
                       {!s.voided && lineProfit.known > 0 && <div style={{ marginTop: 2 }}>Profit <b className="pos-mono" style={{ color: lineProfit.profit < 0 ? 'var(--red)' : 'var(--pine)' }}>{formatMoney(lineProfit.profit, currency)}</b> (excl. VAT)</div>}
                       {s.voided && <div style={{ marginTop: 4, color: 'var(--red)' }}>Voided by {s.voidedBy} on {new Date(s.voidedAt).toLocaleString()}{s.voidReason ? `: ${s.voidReason}` : ''}</div>}
                       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
