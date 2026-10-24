@@ -248,6 +248,8 @@ async function flushPendingSyncActions() {
       let error;
       if (action.type === 'adjust-stock') {
         ({ error } = await invokeFn('adjust-stock', { body: { token: sessionToken, items: action.items, direction: action.direction } }));
+      } else if (action.type === 'log-activity') {
+        ({ error } = await invokeFn('log-activity', { body: { token: sessionToken, ...action.entry } }));
       } else if (action.type === 'record-sale') {
         ({ error } = await invokeFn('record-sale', {
           body: {
@@ -333,6 +335,43 @@ async function getSalesRows() {
   } catch (e) {
     console.error('sales read failed, using local cache', e);
     return readCache('sales') || [];
+  }
+}
+
+function rowToActivity(r) {
+  return {
+    id: r.id,
+    timestamp: r.ts,
+    staffId: r.staff_id,
+    staffName: r.staff_name || 'Unknown',
+    action: r.action,
+    productName: r.subject || '',
+    sku: r.sku || '',
+    detail: r.detail || '',
+    before: r.before || null,
+    after: r.after || null,
+    refId: r.ref_id || null,
+    amount: r.amount != null ? Number(r.amount) : null,
+  };
+}
+
+// Newest 1000 events. If the activity_log table hasn't been created yet
+// (activity-log-setup.sql not run), fall back to the old kv_store array so
+// the app keeps working through the migration.
+async function getActivityRows() {
+  try {
+    const { data, error } = await supabase.from('activity_log').select('*').order('ts', { ascending: false }).limit(1000);
+    if (error) throw error;
+    const rows = (data || []).map(rowToActivity);
+    writeCache('activityLog', rows);
+    return rows;
+  } catch (e) {
+    console.error('activity log read failed, falling back', e);
+    try {
+      return await getOrInit('inventoryLog', []);
+    } catch (e2) {
+      return readCache('activityLog') || [];
+    }
   }
 }
 
@@ -2397,7 +2436,7 @@ function AdminConsole({ inventory, sales, staffList, settings, user, onLogout, l
         <div className="pos-admin-content pos-scroll">
           {tab === 'dashboard' && <DashboardTab inventory={inventory} sales={sales} settings={settings} />}
           {tab === 'inventory' && <InventoryTab inventory={inventory} settings={settings} saveInventory={saveInventory} user={user} logInventoryChange={logInventoryChange} />}
-          {tab === 'activity' && <ActivityTab inventoryLog={inventoryLog} />}
+          {tab === 'activity' && <ActivityTab inventoryLog={inventoryLog} settings={settings} />}
           {tab === 'sales' && <SalesTab sales={sales} settings={settings} voidSale={voidSale} />}
           {tab === 'accounts' && <AccountsTab sales={sales} settings={settings} settleAccountSale={settleAccountSale} />}
           {tab === 'staff' && <StaffTab staffList={staffList} saveStaff={saveStaff} />}
@@ -2617,6 +2656,8 @@ const emptyProduct = { name: '', category: '', sku: '', price: '', stock: '', re
 // versions of a product — e.g. "Stock 40 → 60, Price KSh180 → KSh190".
 // Only reports fields that actually changed, so a name-only edit doesn't
 // show a wall of unchanged numbers.
+const productSnap = (p) => ({ name: p.name, price: Number(p.price), stock: Number(p.stock) });
+
 function summarizeProductChange(before, after, settings) {
   const parts = [];
   if (before.name !== after.name) parts.push(`Name "${before.name}" → "${after.name}"`);
@@ -2698,6 +2739,7 @@ function InventoryTab({ inventory, settings, saveInventory, user, logInventoryCh
           productName: product.name,
           sku: product.sku,
           detail: summarizeProductChange(before, product, settings),
+          before: productSnap(before), after: productSnap(product), refId: product.id,
         });
       }
     } else {
@@ -2709,6 +2751,7 @@ function InventoryTab({ inventory, settings, saveInventory, user, logInventoryCh
           productName: created.name,
           sku: created.sku,
           detail: `Added with ${created.stock} in stock at ${formatMoney(created.price, settings.currency)}`,
+          after: productSnap(created), refId: created.id,
         });
       }
     }
@@ -2724,6 +2767,7 @@ function InventoryTab({ inventory, settings, saveInventory, user, logInventoryCh
         productName: product.name,
         sku: product.sku,
         detail: `Removed (had ${product.stock} in stock)`,
+        before: productSnap(product), refId: product.id,
       });
     }
     setSelectedIds((s) => { const next = new Set(s); next.delete(id); return next; });
@@ -3023,62 +3067,292 @@ function ProductModal({ product, onClose, onSave }) {
   );
 }
 
-const ACTIVITY_ACTION_META = {
-  add: { label: 'Added', color: 'var(--pine)', bg: 'var(--pine-pale)' },
-  edit: { label: 'Edited', color: 'var(--amber)', bg: 'var(--amber-pale)' },
-  delete: { label: 'Deleted', color: 'var(--red)', bg: 'var(--red-pale)' },
-  bulk: { label: 'Bulk edit', color: 'var(--pine)', bg: 'var(--pine-pale)' },
-};
+/* ---------------------------------------------------------------------- */
+/* Activity tab                                                           */
+/* ---------------------------------------------------------------------- */
 
-function ActivityTab({ inventoryLog }) {
+// Each kind of event gets its own icon, colour and label. "price" is not a
+// stored action — it's an 'edit' whose price changed, pulled out because
+// price changes are the edits an admin most wants to spot.
+const ACTIVITY_KIND_META = {
+  add:    { label: 'Added',        color: 'var(--pine)',  bg: 'var(--pine-pale)', Icon: Plus,          loud: false },
+  edit:   { label: 'Edited',       color: 'var(--amber)', bg: 'var(--amber-pale)', Icon: Edit2,        loud: false },
+  price:  { label: 'Price change', color: 'var(--amber)', bg: 'var(--amber-pale)', Icon: TrendingUp,   loud: true },
+  delete: { label: 'Deleted',      color: 'var(--red)',   bg: 'var(--red-pale)',  Icon: Trash2,        loud: true },
+  bulk:   { label: 'Bulk edit',    color: 'var(--pine)',  bg: 'var(--pine-pale)', Icon: Package,       loud: false },
+  void:   { label: 'Sale voided',  color: 'var(--red)',   bg: 'var(--red-pale)',  Icon: X,             loud: true },
+  settle: { label: 'Account paid', color: 'var(--pine)',  bg: 'var(--pine-pale)', Icon: CheckCircle,   loud: false },
+  reject: { label: 'Not saved',    color: 'var(--red)',   bg: 'var(--red-pale)',  Icon: AlertTriangle, loud: true },
+};
+// Kept for any older code that still refers to it.
+const ACTIVITY_ACTION_META = ACTIVITY_KIND_META;
+
+function activityKind(e) {
+  if (e.action === 'edit') {
+    const priceChanged = e.before && e.after
+      ? Number(e.before.price) !== Number(e.after.price)
+      : /(^|, )Price /.test(e.detail || ''); // older entries only have the text
+    if (priceChanged) return 'price';
+  }
+  return ACTIVITY_KIND_META[e.action] ? e.action : 'edit';
+}
+
+function localDateStr(d) {
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+function activityDayLabel(dateStr) {
+  const today = localDateStr(new Date());
+  const yest = localDateStr(new Date(Date.now() - 86400000));
+  if (dateStr === today) return 'Today';
+  if (dateStr === yest) return 'Yesterday';
+  return new Date(dateStr + 'T12:00:00').toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'short', year: 'numeric' });
+}
+
+function timeAgo(iso) {
+  const secs = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000));
+  if (secs < 45) return 'just now';
+  if (secs < 3600) return `${Math.round(secs / 60)} min ago`;
+  if (secs < 86400) return `${Math.round(secs / 3600)} h ago`;
+  return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+function initialsOf(name) {
+  const parts = String(name || '?').trim().split(/\s+/);
+  return ((parts[0] || '?')[0] + (parts.length > 1 ? parts[parts.length - 1][0] : '')).toUpperCase();
+}
+
+function exportActivityCsv(list, settings) {
+  const header = ['Date/Time', 'Staff', 'Type', 'Subject', 'SKU', 'Detail', 'Amount'];
+  const rows = list.map((e) => [
+    new Date(e.timestamp).toLocaleString(),
+    e.staffName,
+    ACTIVITY_KIND_META[activityKind(e)].label,
+    e.productName,
+    e.sku || '',
+    e.detail || '',
+    e.amount != null ? Number(e.amount).toFixed(2) : '',
+  ]);
+  const csv = [header, ...rows].map((r) => r.map(csvCell).join(',')).join('\r\n');
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `activity-${new Date().toISOString().slice(0, 10)}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+function DiffChip({ label, from, to, down }) {
+  return (
+    <span className="pos-mono" style={{
+      display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11.5, padding: '3px 8px', borderRadius: 6,
+      background: '#fff', border: '1px solid var(--border)', color: 'var(--ink)'
+    }}>
+      <span style={{ color: 'var(--muted)' }}>{label}</span>
+      <span style={{ textDecoration: 'line-through', color: 'var(--muted)' }}>{from}</span>
+      <span>→</span>
+      <b style={{ color: down === true ? 'var(--red)' : down === false ? 'var(--pine)' : 'var(--ink)' }}>{to}</b>
+    </span>
+  );
+}
+
+function ActivityTab({ inventoryLog, settings }) {
+  const currency = settings && settings.currency;
+  const PAGE = 40;
+  const [range, setRange] = useState('7d'); // today | 7d | 30d | all | custom
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
   const [staffFilter, setStaffFilter] = useState('All');
+  const [kindFilter, setKindFilter] = useState('all');
+  const [query, setQuery] = useState('');
+  const [shown, setShown] = useState(PAGE);
 
-  const staffNames = ['All', ...Array.from(new Set(inventoryLog.map((e) => e.staffName)))];
+  const pickRange = (r) => {
+    setRange(r);
+    setShown(PAGE);
+    const now = new Date();
+    if (r === 'today') { setFrom(localDateStr(now)); setTo(localDateStr(now)); }
+    else if (r === '7d') { setFrom(localDateStr(new Date(Date.now() - 6 * 86400000))); setTo(''); }
+    else if (r === '30d') { setFrom(localDateStr(new Date(Date.now() - 29 * 86400000))); setTo(''); }
+    else { setFrom(''); setTo(''); }
+  };
+  // Open on the last 7 days.
+  useEffect(() => { pickRange('7d'); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const filtered = inventoryLog.filter((e) => {
+  const all = useMemo(
+    () => [...inventoryLog].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp)),
+    [inventoryLog]
+  );
+  const staffNames = ['All', ...Array.from(new Set(all.map((e) => e.staffName)))];
+
+  // "Needs attention" always looks at today, whatever the filters say.
+  const todayKey = localDateStr(new Date());
+  const todays = all.filter((e) => localDateStr(new Date(e.timestamp)) === todayKey);
+  const countKind = (k) => todays.filter((e) => activityKind(e) === k);
+  const todayVoids = countKind('void');
+  const attention = [
+    { kind: 'void', label: 'Voids today', value: todayVoids.length, sub: todayVoids.length ? formatMoney(todayVoids.reduce((s, e) => s + (Number(e.amount) || 0), 0), currency) : 'none', warn: todayVoids.length > 0 },
+    { kind: 'reject', label: 'Sales not saved', value: countKind('reject').length, sub: 'payment refused', warn: countKind('reject').length > 0 },
+    { kind: 'price', label: 'Price changes', value: countKind('price').length, sub: 'today', warn: false },
+    { kind: 'delete', label: 'Deletions', value: countKind('delete').length, sub: 'today', warn: countKind('delete').length > 0 },
+  ];
+
+  const q = query.trim().toLowerCase();
+  const filtered = all.filter((e) => {
     const d = new Date(e.timestamp);
-    if (from && d < new Date(from)) return false;
+    if (from && d < new Date(from + 'T00:00:00')) return false;
     if (to && d > new Date(to + 'T23:59:59')) return false;
     if (staffFilter !== 'All' && e.staffName !== staffFilter) return false;
+    if (kindFilter !== 'all' && activityKind(e) !== kindFilter) return false;
+    if (q && !`${e.productName} ${e.sku} ${e.detail} ${e.staffName}`.toLowerCase().includes(q)) return false;
     return true;
-  }).sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+  });
+  const visible = filtered.slice(0, shown);
+
+  // Group the visible rows by calendar day.
+  const groups = [];
+  visible.forEach((e) => {
+    const key = localDateStr(new Date(e.timestamp));
+    const last = groups[groups.length - 1];
+    if (last && last.key === key) last.items.push(e); else groups.push({ key, items: [e] });
+  });
+
+  const chipBase = { padding: '6px 11px', borderRadius: 999, border: '1px solid var(--border)', fontSize: 12.5, fontWeight: 600, background: '#fff', color: 'var(--ink)' };
+  const chipOn = { ...chipBase, background: 'var(--pine)', color: '#fff', borderColor: 'var(--pine)' };
+  const inputStyle = { padding: '8px 10px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 13, background: '#fff' };
 
   return (
     <div>
-      <h2 className="pos-serif" style={{ fontSize: 20, fontWeight: 700, marginBottom: 6 }}>Inventory activity</h2>
-      <p style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 16 }}>Every product added, edited, or removed — by admin or staff with inventory access.</p>
-
-      <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 14, flexWrap: 'wrap' }}>
-        <input type="date" value={from} onChange={(e) => setFrom(e.target.value)} style={{ padding: '8px 10px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 13 }} />
-        <span style={{ color: 'var(--muted)', fontSize: 13 }}>to</span>
-        <input type="date" value={to} onChange={(e) => setTo(e.target.value)} style={{ padding: '8px 10px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 13 }} />
-        <select value={staffFilter} onChange={(e) => setStaffFilter(e.target.value)} style={{ padding: '8px 10px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 13 }}>
-          {staffNames.map((n) => <option key={n} value={n}>{n}</option>)}
-        </select>
-        <span style={{ marginLeft: 'auto', fontSize: 13, color: 'var(--muted)' }}>{filtered.length} change{filtered.length !== 1 ? 's' : ''}</span>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10, marginBottom: 4 }}>
+        <h2 className="pos-serif" style={{ fontSize: 20, fontWeight: 700 }}>Activity</h2>
+        <button onClick={() => exportActivityCsv(filtered, settings)} disabled={filtered.length === 0} style={{
+          display: 'flex', alignItems: 'center', gap: 6, padding: '9px 14px', borderRadius: 8, border: '1px solid var(--border)',
+          background: '#fff', fontSize: 13, fontWeight: 600, color: filtered.length === 0 ? 'var(--muted)' : 'var(--pine)'
+        }}>
+          <ClipboardList size={14} /> Export CSV
+        </button>
       </div>
+      <p style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 16 }}>Inventory changes, voided sales, account payments and sales the system refused — who did what, and when.</p>
 
-      <div style={{ background: 'var(--paper)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
-        {filtered.length === 0 && <EmptyState icon={ClipboardList} title="No inventory changes in this range" subtitle="Try widening the date filter above." />}
-        {filtered.map((e) => {
-          const meta = ACTIVITY_ACTION_META[e.action] || ACTIVITY_ACTION_META.edit;
+      {/* Needs-attention strip */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10, marginBottom: 18 }}>
+        {attention.map((a) => {
+          const m = ACTIVITY_KIND_META[a.kind];
+          const hot = a.warn && a.value > 0;
           return (
-            <div key={e.id} style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)', fontSize: 13 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4, flexWrap: 'wrap', gap: 6 }}>
-                <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 6, background: meta.bg, color: meta.color }}>{meta.label}</span>
-                  <span style={{ fontWeight: 600 }}>{e.productName}</span>
-                  {e.sku && <span className="pos-mono" style={{ fontSize: 11, color: 'var(--muted)' }}>{e.sku}</span>}
-                </span>
-                <span style={{ fontSize: 12, color: 'var(--muted)' }}>{e.staffName} · {new Date(e.timestamp).toLocaleString()}</span>
+            <button key={a.kind} onClick={() => { pickRange('today'); setKindFilter(a.kind); }} style={{
+              textAlign: 'left', padding: '12px 14px', borderRadius: 12,
+              border: `1px solid ${hot ? m.color : 'var(--border)'}`, background: hot ? m.bg : 'var(--paper)'
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: hot ? m.color : 'var(--muted)', fontWeight: 600 }}>
+                <m.Icon size={13} /> {a.label}
               </div>
-              <div style={{ fontSize: 12.5, color: 'var(--muted)', paddingLeft: 2 }}>{e.detail}</div>
-            </div>
+              <div className="pos-mono" style={{ fontSize: 24, fontWeight: 700, color: hot ? m.color : 'var(--ink)', margin: '4px 0 2px' }}>{a.value}</div>
+              <div style={{ fontSize: 11.5, color: 'var(--muted)' }}>{a.sub}</div>
+            </button>
           );
         })}
       </div>
+
+      {/* Filters */}
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
+        {[['today', 'Today'], ['7d', '7 days'], ['30d', '30 days'], ['all', 'All time']].map(([k, l]) => (
+          <button key={k} onClick={() => pickRange(k)} style={range === k ? chipOn : chipBase}>{l}</button>
+        ))}
+        <input type="date" value={from} onChange={(e) => { setFrom(e.target.value); setRange('custom'); setShown(PAGE); }} style={inputStyle} />
+        <span style={{ alignSelf: 'center', color: 'var(--muted)', fontSize: 13 }}>to</span>
+        <input type="date" value={to} onChange={(e) => { setTo(e.target.value); setRange('custom'); setShown(PAGE); }} style={inputStyle} />
+        <select value={staffFilter} onChange={(e) => { setStaffFilter(e.target.value); setShown(PAGE); }} style={inputStyle}>
+          {staffNames.map((n) => <option key={n} value={n}>{n === 'All' ? 'All staff' : n}</option>)}
+        </select>
+      </div>
+      <div style={{ position: 'relative', marginBottom: 10 }}>
+        <Search size={14} style={{ position: 'absolute', left: 11, top: 11, color: 'var(--muted)' }} />
+        <input value={query} onChange={(e) => { setQuery(e.target.value); setShown(PAGE); }} placeholder="Search product, SKU, staff or details"
+          style={{ ...inputStyle, width: '100%', paddingLeft: 32, boxSizing: 'border-box' }} />
+      </div>
+      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', marginBottom: 14 }}>
+        <button onClick={() => { setKindFilter('all'); setShown(PAGE); }} style={kindFilter === 'all' ? chipOn : chipBase}>All</button>
+        {Object.entries(ACTIVITY_KIND_META).map(([k, m]) => (
+          <button key={k} onClick={() => { setKindFilter(k); setShown(PAGE); }} style={kindFilter === k ? chipOn : chipBase}>{m.label}</button>
+        ))}
+        <span style={{ marginLeft: 'auto', fontSize: 13, color: 'var(--muted)' }}>{filtered.length} event{filtered.length !== 1 ? 's' : ''}</span>
+      </div>
+
+      {/* Timeline */}
+      {filtered.length === 0 ? (
+        <div style={{ background: 'var(--paper)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
+          <EmptyState icon={ClipboardList} title="Nothing matches these filters"
+            subtitle={all.length === 0 ? 'Activity will appear here as your team works.' : 'Try a wider date range or clear the search.'} />
+        </div>
+      ) : groups.map((g) => (
+        <div key={g.key} style={{ marginBottom: 18 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8, fontSize: 12, fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: 0.4 }}>
+            {activityDayLabel(g.key)}
+            <span style={{ fontWeight: 500, textTransform: 'none', letterSpacing: 0 }}>· {g.items.length}</span>
+            <span style={{ flex: 1, height: 1, background: 'var(--border)' }} />
+          </div>
+          <div style={{ background: 'var(--paper)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
+            {g.items.map((e, idx) => {
+              const kind = activityKind(e);
+              const meta = ACTIVITY_KIND_META[kind];
+              const b = e.before, a = e.after;
+              const priceDiff = b && a && Number(b.price) !== Number(a.price);
+              const stockDiff = b && a && Number(b.stock) !== Number(a.stock);
+              const nameDiff = b && a && b.name !== a.name;
+              const showDiffs = priceDiff || stockDiff || nameDiff;
+              return (
+                <div key={e.id} style={{
+                  display: 'flex', gap: 12, padding: '12px 14px', fontSize: 13,
+                  borderBottom: idx === g.items.length - 1 ? 'none' : '1px solid var(--border)',
+                  borderLeft: `3px solid ${meta.loud ? meta.color : 'transparent'}`,
+                  background: meta.loud ? meta.bg : 'transparent',
+                }}>
+                  <div style={{ width: 30, height: 30, borderRadius: 999, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: meta.bg, color: meta.color, border: `1px solid ${meta.color}` }}>
+                    <meta.Icon size={14} />
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap', alignItems: 'baseline' }}>
+                      <span style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                        <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 6, background: meta.bg, color: meta.color }}>{meta.label}</span>
+                        <span style={{ fontWeight: 600 }}>{e.productName}</span>
+                        {e.sku && <span className="pos-mono" style={{ fontSize: 11, color: 'var(--muted)' }}>{e.sku}</span>}
+                      </span>
+                      {e.amount != null && <span className="pos-mono" style={{ fontWeight: 700, color: meta.loud ? meta.color : 'var(--ink)' }}>{formatMoney(Number(e.amount), currency)}</span>}
+                    </div>
+                    {showDiffs ? (
+                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 6 }}>
+                        {nameDiff && <DiffChip label="Name" from={b.name} to={a.name} />}
+                        {priceDiff && <DiffChip label="Price" from={formatMoney(b.price, currency)} to={formatMoney(a.price, currency)} down={Number(a.price) < Number(b.price)} />}
+                        {stockDiff && <DiffChip label="Stock" from={b.stock} to={a.stock} down={Number(a.stock) < Number(b.stock)} />}
+                      </div>
+                    ) : (
+                      e.detail && <div style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: 3, lineHeight: 1.4 }}>{e.detail}</div>
+                    )}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 7, fontSize: 12, color: 'var(--muted)' }}>
+                      <span style={{ width: 20, height: 20, borderRadius: 999, background: 'var(--pine-pale)', color: 'var(--pine)', fontSize: 9.5, fontWeight: 700, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>{initialsOf(e.staffName)}</span>
+                      <span>{e.staffName}</span>
+                      <span>·</span>
+                      <span title={new Date(e.timestamp).toLocaleString()}>{timeAgo(e.timestamp)}</span>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ))}
+
+      {filtered.length > visible.length && (
+        <button onClick={() => setShown((n) => n + PAGE)} style={{
+          display: 'block', margin: '4px auto 0', padding: '10px 18px', borderRadius: 8, border: '1px solid var(--border)',
+          background: '#fff', fontSize: 13, fontWeight: 600, color: 'var(--pine)'
+        }}>Show {Math.min(PAGE, filtered.length - visible.length)} more ({filtered.length - visible.length} left)</button>
+      )}
     </div>
   );
 }
@@ -3569,7 +3843,7 @@ function App() {
       getSalesRows(),
       getOrInit('staff', DEFAULT_STAFF),
       getOrInit('settings', DEFAULT_SETTINGS),
-      getOrInit('inventoryLog', []),
+      getActivityRows(),
     ]);
     setInventory(inv); setSales(sls); setStaffList(stf); setSettings({ ...DEFAULT_SETTINGS, ...cfg }); setInventoryLog(invLog);
     setLastSynced(new Date().toLocaleTimeString());
@@ -3591,6 +3865,9 @@ function App() {
         loadAll();
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'sales' }, () => {
+        loadAll();
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'activity_log' }, () => {
         loadAll();
       })
       .subscribe();
@@ -3763,17 +4040,28 @@ function App() {
 
     return { ok: rejected.length === 0, errors: rejected.map((r) => r.message) };
   };
-  const logInventoryChange = async ({ action, productName, sku, detail }) => {
+  const logInventoryChange = async ({ action, productName, sku, detail, before, after, refId }) => {
     const entry = {
       id: genId('log'),
       timestamp: new Date().toISOString(),
       staffId: user?.id,
       staffName: user?.name || 'Unknown',
       action, productName, sku, detail,
+      before: before || null, after: after || null, refId: refId || null, amount: null,
     };
-    const next = [...inventoryLog, entry];
-    setInventoryLog(next);
-    await saveShared('inventoryLog', next);
+    // Show it straight away; the server row (and realtime) confirms it.
+    setInventoryLog((prev) => [entry, ...prev]);
+    const payload = { id: entry.id, action, subject: productName, sku, detail, before: before || null, after: after || null, refId: refId || null };
+    try {
+      const { error } = await invokeFn('log-activity', { body: { token: sessionToken, ...payload } });
+      if (error) {
+        if (error.network) { queueSyncAction({ type: 'log-activity', entry: payload }); refreshPending(); }
+        else console.error('Activity log rejected (not retried):', error.message);
+      }
+    } catch (e) {
+      queueSyncAction({ type: 'log-activity', entry: payload });
+      refreshPending();
+    }
   };
   const saveStaffList = async (next) => {
     setStaffList(next);
@@ -4030,4 +4318,3 @@ function ConfigMissing() {
 
 const root = ReactDOM.createRoot(document.getElementById('root'));
 root.render(configReady ? <App /> : <ConfigMissing />);
-              
