@@ -253,7 +253,7 @@ async function flushPendingSyncActions() {
           body: {
             token: sessionToken, action: action.saleAction, sale: action.sale, id: action.id,
             reason: action.reason, voidedBy: action.voidedBy, method: action.method, settledBy: action.settledBy,
-            mpesaReceipt: action.mpesaReceipt, paymentRef: action.paymentRef,
+            mpesaReceipt: action.mpesaReceipt, paymentRef: action.paymentRef, paymentTxnId: action.paymentTxnId,
           },
         }));
       } else {
@@ -1159,6 +1159,7 @@ function StaffPOS({ inventory, sales, settings, user, addSale, updateStock, last
       change: payment.change ?? 0,
       mpesaReceipt: payment.mpesaReceipt || null,
       paymentRef: payment.paymentRef || null,
+      paymentTxnId: payment.paymentTxnId || null,
       customerName: payment.customerName || null,
       customerPhone: payment.customerPhone || null,
       settled: payment.method !== 'account',
@@ -1849,6 +1850,7 @@ function CheckoutModal({ cart, subtotal, tax, total, settings, onClose, onComple
   const [mpesaStatus, setMpesaStatus] = useState('idle'); // idle | sending | waiting | success | failed | timeout
   const [mpesaError, setMpesaError] = useState('');
   const [mpesaReceipt, setMpesaReceipt] = useState(null);
+  const [mpesaTxnId, setMpesaTxnId] = useState(null);
   const [customerName, setCustomerName] = useState('');
   const [customerPhone, setCustomerPhone] = useState('');
   const pollTimer = useRef(null);
@@ -1866,7 +1868,7 @@ function CheckoutModal({ cart, subtotal, tax, total, settings, onClose, onComple
   // Once M-Pesa confirms payment, finish the sale automatically.
   useEffect(() => {
     if (method === 'mpesa' && mpesaStatus === 'success') {
-      onComplete({ method: 'mpesa', tendered: total, change: 0, mpesaReceipt });
+      onComplete({ method: 'mpesa', tendered: total, change: 0, mpesaReceipt, paymentTxnId: mpesaTxnId });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mpesaStatus]);
@@ -1884,6 +1886,7 @@ function CheckoutModal({ cart, subtotal, tax, total, settings, onClose, onComple
           clearInterval(pollTimer.current);
           if (data.status === 'success') {
             setMpesaReceipt(data.mpesa_receipt);
+            setMpesaTxnId(checkoutRequestId);
             setMpesaStatus('success');
           } else {
             setMpesaError(data.result_desc || 'The customer did not complete the payment.');
@@ -1907,6 +1910,7 @@ function CheckoutModal({ cart, subtotal, tax, total, settings, onClose, onComple
           if (queryData && queryData.status === 'success' && PAYMENT_PROVIDER === 'paystack') {
             clearInterval(pollTimer.current);
             setMpesaReceipt(queryData.receipt || null);
+            setMpesaTxnId(checkoutRequestId);
             setMpesaStatus('success');
             return;
           }
@@ -2128,6 +2132,7 @@ function AccountMpesaModal({ customer, settings, onClose, onSettled }) {
   const [status, setStatus] = useState('idle'); // idle | sending | waiting | success | failed | timeout
   const [error, setError] = useState('');
   const [receipt, setReceipt] = useState(null);
+  const [txnId, setTxnId] = useState(null);
   const pollTimer = useRef(null);
   // Covers a customer who already sent the money straight to the paybill/
   // till on their own, outside any prompt this app sent — there's no STK
@@ -2145,7 +2150,7 @@ function AccountMpesaModal({ customer, settings, onClose, onSettled }) {
   useEffect(() => () => { if (pollTimer.current) clearInterval(pollTimer.current); }, []);
 
   useEffect(() => {
-    if (status === 'success') onSettled(receipt);
+    if (status === 'success') onSettled(receipt, txnId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status]);
 
@@ -2162,6 +2167,7 @@ function AccountMpesaModal({ customer, settings, onClose, onSettled }) {
           clearInterval(pollTimer.current);
           if (data.status === 'success') {
             setReceipt(data.mpesa_receipt);
+            setTxnId(checkoutRequestId);
             setStatus('success');
           } else {
             setError(data.result_desc || 'The customer did not complete the payment.');
@@ -2178,6 +2184,7 @@ function AccountMpesaModal({ customer, settings, onClose, onSettled }) {
           if (queryData && queryData.status === 'success' && PAYMENT_PROVIDER === 'paystack') {
             clearInterval(pollTimer.current);
             setReceipt(queryData.receipt || null);
+            setTxnId(checkoutRequestId);
             setStatus('success');
             return;
           }
@@ -3222,10 +3229,10 @@ function AccountsTab({ sales, settings, settleAccountSale }) {
     setCardPrompt(null);
   };
 
-  const handleMpesaSettled = async (receipt) => {
+  const handleMpesaSettled = async (receipt, txnId) => {
     if (!mpesaPrompt) return;
     setBusyId(mpesaPrompt.sale.id);
-    await settleAccountSale(mpesaPrompt.sale.id, 'mpesa', receipt);
+    await settleAccountSale(mpesaPrompt.sale.id, 'mpesa', receipt, undefined, txnId);
     setBusyId(null);
     setMpesaPrompt(null);
   };
@@ -3799,7 +3806,39 @@ function App() {
           queueSyncAction({ type: 'record-sale', saleAction: 'insert', sale });
           refreshPending();
         } else {
+          // The server refused the sale, so it is NOT in the database.
           console.error('Sale insert rejected (not retried):', error.message);
+
+          // 1. Take it out of this till's local list so totals stay honest.
+          setSales((prev) => {
+            const n = prev.filter((s) => s.id !== sale.id);
+            writeCache('sales', n);
+            return n;
+          });
+
+          // 2. Put the stock back (completeSale already decremented it).
+          const items = (sale.items || []).map((i) => ({ id: i.id, qty: i.qty }));
+          setInventory((prev) => {
+            const n = prev.map((p) => {
+              const it = items.find((i) => i.id === p.id);
+              return it ? { ...p, stock: p.stock + it.qty } : p;
+            });
+            writeCache('inventory', n);
+            return n;
+          });
+          try {
+            await invokeFn('adjust-stock', { body: { token: sessionToken, items, direction: 'increment' } });
+          } catch (e) {
+            queueSyncAction({ type: 'adjust-stock', items, direction: 'increment' });
+            refreshPending();
+          }
+
+          // 3. Tell the cashier — otherwise this fails silently.
+          const ref = sale.mpesaReceipt || sale.paymentRef || sale.paymentTxnId;
+          window.alert(
+            `This sale of KSh ${Number(sale.total).toFixed(2)} was NOT saved.\n\n${error.message}` +
+            (ref ? `\n\nPayment reference: ${ref}. Note it down and tell the admin.` : '')
+          );
         }
       }
     } catch (e) {
@@ -3902,7 +3941,7 @@ function App() {
   // off what they owe, recording how and by whom. mpesaReceipt is only
   // set when the balance was collected via a live STK push prompt (see
   // AccountMpesaModal) rather than just picked from the method dropdown.
-  const settleAccountSale = async (saleId, method, mpesaReceipt, paymentRef) => {
+  const settleAccountSale = async (saleId, method, mpesaReceipt, paymentRef, paymentTxnId) => {
     const settledBy = user?.name || 'Unknown';
     const nextSales = sales.map((s) => (s.id === saleId ? {
       ...s,
@@ -3912,20 +3951,21 @@ function App() {
       settledMethod: method || 'cash',
       ...(mpesaReceipt ? { mpesaReceipt } : {}),
       ...(paymentRef ? { paymentRef } : {}),
+      ...(paymentTxnId ? { paymentTxnId } : {}),
     } : s));
     setSales(nextSales);
     writeCache('sales', nextSales);
 
     try {
       const { error } = await invokeFn('record-sale', {
-        body: { token: sessionToken, action: 'settle', id: saleId, method, settledBy, mpesaReceipt, paymentRef },
+        body: { token: sessionToken, action: 'settle', id: saleId, method, settledBy, mpesaReceipt, paymentRef, paymentTxnId },
       });
       if (error) {
-        if (error.network) queueSyncAction({ type: 'record-sale', saleAction: 'settle', id: saleId, method, settledBy, mpesaReceipt, paymentRef });
+        if (error.network) queueSyncAction({ type: 'record-sale', saleAction: 'settle', id: saleId, method, settledBy, mpesaReceipt, paymentRef, paymentTxnId });
         else console.error('Sale settle rejected (not retried):', error.message);
       }
     } catch (e) {
-      queueSyncAction({ type: 'record-sale', saleAction: 'settle', id: saleId, method, settledBy, mpesaReceipt, paymentRef });
+      queueSyncAction({ type: 'record-sale', saleAction: 'settle', id: saleId, method, settledBy, mpesaReceipt, paymentRef, paymentTxnId });
     }
     setLastSynced(new Date().toLocaleTimeString());
   };
@@ -3990,3 +4030,4 @@ function ConfigMissing() {
 
 const root = ReactDOM.createRoot(document.getElementById('root'));
 root.render(configReady ? <App /> : <ConfigMissing />);
+              
