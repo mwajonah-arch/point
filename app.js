@@ -4538,12 +4538,6 @@ function ActivityTab({ inventoryLog, settings }) {
       </div>
 
       {/* Filters */}
-      {limitedDays && onLoadFull && (range === 'all' || range === 'custom') && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', fontSize: 13, color: 'var(--muted)', marginBottom: 10 }}>
-          <span>Showing the last {limitedDays} days of sales, plus any unpaid account sales.</span>
-          <button type="button" className="pcs-link" onClick={onLoadFull}>Load full history</button>
-        </div>
-      )}
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
         {[['today', 'Today'], ['7d', '7 days'], ['30d', '30 days'], ['all', 'All time']].map(([k, l]) => (
           <button key={k} onClick={() => pickRange(k)} style={range === k ? chipOn : chipBase}>{l}</button>
@@ -4760,6 +4754,12 @@ function SalesTab({ sales, inventory, settings, voidSale, limitedDays, onLoadFul
         </div>
       )}
 
+      {limitedDays && onLoadFull && (range === 'all' || range === 'custom') && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', fontSize: 13, color: 'var(--muted)', marginBottom: 10 }}>
+          <span>Showing the last {limitedDays} days of sales, plus any unpaid account sales.</span>
+          <button type="button" className="pcs-link" onClick={onLoadFull}>Load full history</button>
+        </div>
+      )}
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
         {[['today', 'Today'], ['7d', '7 days'], ['30d', '30 days'], ['all', 'All time']].map(([k, l]) => (
           <button key={k} onClick={() => pickRange(k)} style={range === k ? chipOn : chipBase}>{l}</button>
