@@ -2361,6 +2361,7 @@ function ReceiptModal({ sale, settings, onClose }) {
         <div style={{ textAlign: 'center', marginBottom: 12 }}>
           <CheckCircle size={28} color="var(--pine)" style={{ marginBottom: 6 }} />
           <div className="pos-serif" style={{ fontSize: 16, fontWeight: 700 }}>{settings.pharmacyName}</div>
+          {(settings.address || settings.phone) && <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2 }}>{[settings.address, settings.phone].filter(Boolean).join(' · ')}</div>}
           <div style={{ color: 'var(--muted)' }}>{new Date(sale.timestamp).toLocaleString()}</div>
           <div style={{ color: 'var(--muted)' }}>Cashier: {sale.cashier}</div>
         </div>
@@ -2391,7 +2392,7 @@ function ReceiptModal({ sale, settings, onClose }) {
             <div style={{ textAlign: 'center', fontWeight: 700, color: 'var(--amber)', marginTop: 8 }}>UNPAID — on account</div>
           </>
         )}
-        <div style={{ textAlign: 'center', color: 'var(--muted)', marginTop: 12 }}>Thank you — get well soon</div>
+        <div style={{ textAlign: 'center', color: 'var(--muted)', marginTop: 12 }}>{settings.receiptFooter || 'Thank you — get well soon'}</div>
         <div className="pos-no-print" style={{ display: 'flex', gap: 8, marginTop: 16 }}>
           <button onClick={() => window.print()} style={{ flex: 1, padding: '10px 0', borderRadius: 8, border: '1px solid var(--pine)', background: '#fff', color: 'var(--pine)', fontWeight: 600, fontFamily: 'Inter, sans-serif', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
             <Printer size={14} /> Print
@@ -2410,6 +2411,12 @@ function ReceiptModal({ sale, settings, onClose }) {
 function AdminConsole({ inventory, sales, staffList, settings, user, onLogout, lastSynced,
   saveInventory, saveStaff, saveSettings, inventoryLog, logInventoryChange, voidSale, settleAccountSale }) {
   const [tab, setTab] = useState('dashboard');
+  const todayKey = localDateStr(new Date());
+  const badges = {
+    inventory: inventory.filter((p) => p.stock <= p.reorderLevel).length,
+    accounts: sales.filter((s) => s.paymentMethod === 'account' && !s.voided && !s.settled).length,
+    activity: (inventoryLog || []).filter((e) => activityKind(e) === 'void' && localDateStr(new Date(e.timestamp)) === todayKey).length,
+  };
   const navItems = [
     { key: 'dashboard', label: 'Dashboard', Icon: LayoutDashboard },
     { key: 'inventory', label: 'Inventory', Icon: Package },
@@ -2431,16 +2438,21 @@ function AdminConsole({ inventory, sales, staffList, settings, user, onLogout, l
               display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px',
               borderRadius: 8, border: 'none', marginBottom: 4, textAlign: 'left', fontSize: 14,
               background: tab === key ? 'var(--pine)' : 'transparent', color: tab === key ? '#fff' : 'var(--ink)'
-            }}><Icon size={16} />{label}</button>
+            }}><Icon size={16} />{label}
+              {badges[key] > 0 && <span title={key === 'inventory' ? 'Low or out of stock' : key === 'accounts' ? 'Unpaid account sales' : 'Voids today'} style={{
+                marginLeft: 'auto', minWidth: 18, padding: '1px 6px', borderRadius: 999, fontSize: 11, fontWeight: 700, textAlign: 'center', color: '#fff',
+                background: tab === key ? 'rgba(255,255,255,.28)' : (key === 'accounts' ? 'var(--amber)' : 'var(--red)')
+              }}>{badges[key]}</span>}
+            </button>
           ))}
         </div>
         <div className="pos-admin-content pos-scroll">
           {tab === 'dashboard' && <DashboardTab inventory={inventory} sales={sales} settings={settings} />}
           {tab === 'inventory' && <InventoryTab inventory={inventory} settings={settings} saveInventory={saveInventory} user={user} logInventoryChange={logInventoryChange} />}
           {tab === 'activity' && <ActivityTab inventoryLog={inventoryLog} settings={settings} />}
-          {tab === 'sales' && <SalesTab sales={sales} settings={settings} voidSale={voidSale} />}
+          {tab === 'sales' && <SalesTab sales={sales} inventory={inventory} settings={settings} voidSale={voidSale} />}
           {tab === 'accounts' && <AccountsTab sales={sales} settings={settings} settleAccountSale={settleAccountSale} />}
-          {tab === 'staff' && <StaffTab staffList={staffList} saveStaff={saveStaff} />}
+          {tab === 'staff' && <StaffTab staffList={staffList} saveStaff={saveStaff} sales={sales} settings={settings} />}
           {tab === 'settings' && <SettingsTab settings={settings} saveSettings={saveSettings} />}
         </div>
       </div>
@@ -3410,99 +3422,224 @@ function ActivityTab({ inventoryLog, settings }) {
   );
 }
 
-function SalesTab({ sales, settings, voidSale }) {
-  const [from, setFrom] = useState('');
+const PAYMENT_LABELS = { cash: 'Cash', mpesa: 'M-Pesa', card: 'Card', account: 'On account' };
+
+function SalesTab({ sales, inventory, settings, voidSale }) {
+  const currency = settings.currency;
+  const PAGE = 40;
+  const [range, setRange] = useState('7d'); // today | 7d | 30d | all | custom
+  const [from, setFrom] = useState(() => localDateStr(new Date(Date.now() - 6 * 86400000)));
   const [to, setTo] = useState('');
+  const [cashier, setCashier] = useState('All');
+  const [method, setMethod] = useState('all');
+  const [status, setStatus] = useState('all'); // all | paid | unpaid | voided
+  const [query, setQuery] = useState('');
+  const [shown, setShown] = useState(PAGE);
   const [expanded, setExpanded] = useState(null);
   const [voidingId, setVoidingId] = useState(null);
   const [voidReason, setVoidReason] = useState('');
   const [busy, setBusy] = useState(false);
+  const [receiptSale, setReceiptSale] = useState(null);
 
-  const filtered = sales.filter((s) => {
+  const costById = useMemo(() => new Map((inventory || []).map((p) => [p.id, p.cost || 0])), [inventory]);
+  const pickRange = (r) => {
+    setRange(r); setShown(PAGE);
+    const now = new Date();
+    if (r === 'today') { setFrom(localDateStr(now)); setTo(localDateStr(now)); }
+    else if (r === '7d') { setFrom(localDateStr(new Date(Date.now() - 6 * 86400000))); setTo(''); }
+    else if (r === '30d') { setFrom(localDateStr(new Date(Date.now() - 29 * 86400000))); setTo(''); }
+    else { setFrom(''); setTo(''); }
+  };
+
+  const all = useMemo(() => [...sales].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp)), [sales]);
+  const cashiers = ['All', ...Array.from(new Set(all.map((s) => s.cashier).filter(Boolean)))];
+  const methods = Array.from(new Set(all.map((s) => s.paymentMethod).filter(Boolean)));
+  const isUnpaid = (s) => s.paymentMethod === 'account' && !s.settled && !s.voided;
+
+  const q = query.trim().toLowerCase();
+  const filtered = all.filter((s) => {
     const d = new Date(s.timestamp);
     if (from && d < new Date(from + 'T00:00:00')) return false;
     if (to && d > new Date(to + 'T23:59:59')) return false;
+    if (cashier !== 'All' && s.cashier !== cashier) return false;
+    if (method !== 'all' && s.paymentMethod !== method) return false;
+    if (status === 'voided' && !s.voided) return false;
+    if (status === 'unpaid' && !isUnpaid(s)) return false;
+    if (status === 'paid' && (s.voided || isUnpaid(s))) return false;
+    if (q) {
+      const hay = `${(s.items || []).map((i) => i.name).join(' ')} ${s.customerName || ''} ${s.cashier || ''} ${s.mpesaReceipt || ''} ${s.paymentRef || ''}`.toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
     return true;
-  }).sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+  });
+  const visible = filtered.slice(0, shown);
 
-  const total = filtered.filter((s) => !s.voided).reduce((sum, s) => sum + s.total, 0);
+  const live = filtered.filter((s) => !s.voided);
+  const total = live.reduce((sum, s) => sum + s.total, 0);
+  const fin = summarizeProfit(live, costById);
+  const unpaidList = filtered.filter(isUnpaid);
+  const voidedList = filtered.filter((s) => s.voided);
+  const byMethod = {};
+  live.forEach((s) => { byMethod[s.paymentMethod] = (byMethod[s.paymentMethod] || 0) + s.total; });
+
+  const groups = [];
+  visible.forEach((s) => {
+    const key = localDateStr(new Date(s.timestamp));
+    const last = groups[groups.length - 1];
+    if (last && last.key === key) last.items.push(s); else groups.push({ key, items: [s] });
+  });
 
   const confirmVoid = async (id) => {
     if (!voidSale) return;
     setBusy(true);
     await voidSale(id, voidReason.trim());
-    setBusy(false);
-    setVoidingId(null);
-    setVoidReason('');
+    setBusy(false); setVoidingId(null); setVoidReason('');
   };
+
+  const chipBase = { padding: '6px 11px', borderRadius: 999, border: '1px solid var(--border)', fontSize: 12.5, fontWeight: 600, background: '#fff', color: 'var(--ink)' };
+  const chipOn = { ...chipBase, background: 'var(--pine)', color: '#fff', borderColor: 'var(--pine)' };
+  const inputStyle = { padding: '8px 10px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 13, background: '#fff' };
+  const reset = () => setShown(PAGE);
+  const pill = (text, color, bg) => <span style={{ fontSize: 10, fontWeight: 700, color, background: bg, padding: '2px 6px', borderRadius: 5 }}>{text}</span>;
+
+  const cards = [
+    { label: 'Sales', value: formatMoney(total, currency), sub: `${live.length} transaction${live.length !== 1 ? 's' : ''} · incl. VAT` },
+    { label: 'Profit', value: fin.known ? formatMoney(fin.profit, currency) : '—', color: fin.known ? (fin.profit < 0 ? 'var(--red)' : 'var(--pine)') : null,
+      sub: fin.known ? `${fin.margin.toFixed(1)}% margin${fin.coverage < 0.99 ? ` · ${Math.round(fin.coverage * 100)}% costed` : ''}` : 'no buying prices yet' },
+    { label: 'Unpaid on account', value: formatMoney(unpaidList.reduce((x, s) => x + s.total, 0), currency), sub: `${unpaidList.length} sale${unpaidList.length !== 1 ? 's' : ''}`, hot: unpaidList.length > 0, color: 'var(--amber)', bg: 'var(--amber-pale)', onClick: () => { setStatus('unpaid'); reset(); } },
+    { label: 'Voided', value: voidedList.length, sub: voidedList.length ? formatMoney(voidedList.reduce((x, s) => x + s.total, 0), currency) : 'none', hot: voidedList.length > 0, color: 'var(--red)', bg: 'var(--red-pale)', onClick: () => { setStatus('voided'); reset(); } },
+  ];
 
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10, marginBottom: 16 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10, marginBottom: 4 }}>
         <h2 className="pos-serif" style={{ fontSize: 20, fontWeight: 700 }}>Sales history</h2>
         <button onClick={() => exportSalesCsv(filtered, settings)} disabled={filtered.length === 0} style={{
           display: 'flex', alignItems: 'center', gap: 6, padding: '9px 14px', borderRadius: 8, border: '1px solid var(--border)',
           background: '#fff', fontSize: 13, fontWeight: 600, color: filtered.length === 0 ? 'var(--muted)' : 'var(--pine)'
-        }}>
-          <ClipboardList size={14} /> Export CSV
-        </button>
+        }}><ClipboardList size={14} /> Export CSV</button>
       </div>
-      <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 14, flexWrap: 'wrap' }}>
-        <input type="date" value={from} onChange={(e) => setFrom(e.target.value)} style={{ padding: '8px 10px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 13 }} />
-        <span style={{ color: 'var(--muted)', fontSize: 13 }}>to</span>
-        <input type="date" value={to} onChange={(e) => setTo(e.target.value)} style={{ padding: '8px 10px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 13 }} />
-        <span style={{ marginLeft: 'auto', fontSize: 13, color: 'var(--muted)' }}>{filtered.length} transactions · <b className="pos-mono" style={{ color: 'var(--ink)' }}>{formatMoney(total, settings.currency)}</b></span>
+      <p style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 16 }}>Every sale, who rang it up and how it was paid. Figures below follow your filters.</p>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10, marginBottom: 8 }}>
+        {cards.map((c) => {
+          const hot = c.hot;
+          const Tag = c.onClick ? 'button' : 'div';
+          return (
+            <Tag key={c.label} onClick={c.onClick} style={{ textAlign: 'left', padding: '12px 14px', borderRadius: 12, border: `1px solid ${hot ? c.color : 'var(--border)'}`, background: hot ? c.bg : 'var(--paper)' }}>
+              <div style={{ fontSize: 12, fontWeight: 600, color: hot ? c.color : 'var(--muted)' }}>{c.label}</div>
+              <div className="pos-mono" style={{ fontSize: 20, fontWeight: 700, color: hot ? c.color : (c.color || 'var(--ink)'), margin: '4px 0 2px' }}>{c.value}</div>
+              <div style={{ fontSize: 11.5, color: 'var(--muted)' }}>{c.sub}</div>
+            </Tag>
+          );
+        })}
       </div>
+      {Object.keys(byMethod).length > 0 && (
+        <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 16, display: 'flex', gap: 14, flexWrap: 'wrap' }}>
+          {Object.entries(byMethod).map(([m, v]) => <span key={m}>{PAYMENT_LABELS[m] || m} <b className="pos-mono" style={{ color: 'var(--ink)' }}>{formatMoney(v, currency)}</b></span>)}
+        </div>
+      )}
 
-      <div style={{ background: 'var(--paper)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
-        {filtered.length === 0 && <EmptyState icon={Receipt} title="No transactions in this range" subtitle="Try widening the date filter above." />}
-        {filtered.map((s) => (
-          <div key={s.id} style={{ borderBottom: '1px solid var(--border)' }}>
-            <div onClick={() => setExpanded(expanded === s.id ? null : s.id)} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 16px', cursor: 'pointer', fontSize: 13 }}>
-              <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <ChevronRight size={13} style={{ transform: expanded === s.id ? 'rotate(90deg)' : 'none', transition: 'transform .15s' }} />
-                <span style={{ textDecoration: s.voided ? 'line-through' : 'none', color: s.voided ? 'var(--muted)' : 'var(--ink)' }}>
-                  {new Date(s.timestamp).toLocaleString()} · {s.cashier}
-                </span>
-                {s.voided && <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--red)', background: 'var(--red-pale)', padding: '2px 6px', borderRadius: 5 }}>Voided</span>}
-                {s.paymentMethod === 'account' && !s.settled && !s.voided && <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--amber)', background: 'var(--amber-pale)', padding: '2px 6px', borderRadius: 5 }}>Unpaid</span>}
-              </span>
-              <span className="pos-mono" style={{ color: s.voided ? 'var(--muted)' : 'var(--ink)', textDecoration: s.voided ? 'line-through' : 'none' }}>{formatMoney(s.total, settings.currency)}</span>
-            </div>
-            {expanded === s.id && (
-              <div style={{ padding: '4px 16px 14px 37px', fontSize: 12.5, color: 'var(--muted)' }}>
-                {s.items.map((i) => (
-                  <div key={i.id} style={{ display: 'flex', justifyContent: 'space-between' }}>
-                    <span>{i.qty} x {i.name}</span><span className="pos-mono">{formatMoney(i.price * i.qty, settings.currency)}</span>
-                  </div>
-                ))}
-                <div style={{ marginTop: 4 }}>Paid via {s.paymentMethod}{s.customerName ? ` — ${s.customerName}` : ''}</div>
-                {s.voided && <div style={{ marginTop: 4, color: 'var(--red)' }}>Voided by {s.voidedBy} on {new Date(s.voidedAt).toLocaleString()}{s.voidReason ? `: ${s.voidReason}` : ''}</div>}
-
-                {!s.voided && voidSale && (
-                  voidingId === s.id ? (
-                    <div style={{ marginTop: 10, padding: 10, background: 'var(--red-pale)', borderRadius: 8 }}>
-                      <label style={{ fontSize: 11, color: '#7A2530' }}>Reason for reversing this sale</label>
-                      <input value={voidReason} onChange={(e) => setVoidReason(e.target.value)} placeholder="e.g. customer changed their mind"
-                        style={{ width: '100%', padding: '7px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 12, marginTop: 4, marginBottom: 8 }} />
-                      <div style={{ display: 'flex', gap: 8 }}>
-                        <button disabled={busy} onClick={() => confirmVoid(s.id)} style={{ flex: 1, padding: '7px 0', borderRadius: 7, border: 'none', background: 'var(--red)', color: '#fff', fontSize: 12, fontWeight: 600, opacity: busy ? 0.6 : 1 }}>
-                          {busy ? 'Voiding…' : 'Confirm void'}
-                        </button>
-                        <button onClick={() => setVoidingId(null)} style={{ flex: 1, padding: '7px 0', borderRadius: 7, border: '1px solid var(--border)', background: '#fff', fontSize: 12 }}>Cancel</button>
-                      </div>
-                    </div>
-                  ) : (
-                    <button onClick={() => { setVoidingId(s.id); setVoidReason(''); }} style={{ marginTop: 8, background: 'none', border: '1px solid var(--red)', color: 'var(--red)', borderRadius: 7, padding: '6px 12px', fontSize: 12 }}>
-                      Void this sale
-                    </button>
-                  )
-                )}
-              </div>
-            )}
-          </div>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
+        {[['today', 'Today'], ['7d', '7 days'], ['30d', '30 days'], ['all', 'All time']].map(([k, l]) => (
+          <button key={k} onClick={() => pickRange(k)} style={range === k ? chipOn : chipBase}>{l}</button>
         ))}
+        <input type="date" value={from} onChange={(e) => { setFrom(e.target.value); setRange('custom'); reset(); }} style={inputStyle} />
+        <span style={{ alignSelf: 'center', color: 'var(--muted)', fontSize: 13 }}>to</span>
+        <input type="date" value={to} onChange={(e) => { setTo(e.target.value); setRange('custom'); reset(); }} style={inputStyle} />
+        <select value={cashier} onChange={(e) => { setCashier(e.target.value); reset(); }} style={inputStyle}>
+          {cashiers.map((n) => <option key={n} value={n}>{n === 'All' ? 'All cashiers' : n}</option>)}
+        </select>
+        <select value={method} onChange={(e) => { setMethod(e.target.value); reset(); }} style={inputStyle}>
+          <option value="all">All payment types</option>
+          {methods.map((m) => <option key={m} value={m}>{PAYMENT_LABELS[m] || m}</option>)}
+        </select>
       </div>
+      <div style={{ position: 'relative', marginBottom: 10 }}>
+        <Search size={14} style={{ position: 'absolute', left: 11, top: 11, color: 'var(--muted)' }} />
+        <input value={query} onChange={(e) => { setQuery(e.target.value); reset(); }} placeholder="Search item, customer, cashier or payment reference"
+          style={{ ...inputStyle, width: '100%', paddingLeft: 32, boxSizing: 'border-box' }} />
+      </div>
+      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', marginBottom: 14 }}>
+        {[['all', 'All'], ['paid', 'Paid'], ['unpaid', 'Unpaid'], ['voided', 'Voided']].map(([k, l]) => (
+          <button key={k} onClick={() => { setStatus(k); reset(); }} style={status === k ? chipOn : chipBase}>{l}</button>
+        ))}
+        <span style={{ marginLeft: 'auto', fontSize: 13, color: 'var(--muted)' }}>{filtered.length} sale{filtered.length !== 1 ? 's' : ''}</span>
+      </div>
+
+      {filtered.length === 0 ? (
+        <div style={{ background: 'var(--paper)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
+          <EmptyState icon={Receipt} title="No sales match these filters" subtitle={all.length === 0 ? 'Sales will appear here as your team rings them up.' : 'Try a wider date range or clear the search.'} />
+        </div>
+      ) : groups.map((g) => (
+        <div key={g.key} style={{ marginBottom: 18 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8, fontSize: 12, fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: 0.4 }}>
+            {activityDayLabel(g.key)}
+            <span style={{ fontWeight: 500, textTransform: 'none', letterSpacing: 0 }}>· {g.items.length} · {formatMoney(g.items.filter((s) => !s.voided).reduce((x, s) => x + s.total, 0), currency)}</span>
+            <span style={{ flex: 1, height: 1, background: 'var(--border)' }} />
+          </div>
+          <div style={{ background: 'var(--paper)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
+            {g.items.map((s, idx) => {
+              const open = expanded === s.id;
+              const items = s.items || [];
+              const lineProfit = summarizeProfit([s], costById);
+              return (
+                <div key={s.id} style={{ borderBottom: idx === g.items.length - 1 ? 'none' : '1px solid var(--border)', borderLeft: `3px solid ${s.voided ? 'var(--red)' : isUnpaid(s) ? 'var(--amber)' : 'transparent'}` }}>
+                  <div onClick={() => setExpanded(open ? null : s.id)} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, padding: '11px 14px', cursor: 'pointer', fontSize: 13 }}>
+                    <span style={{ display: 'flex', alignItems: 'center', gap: 9, minWidth: 0, flexWrap: 'wrap' }}>
+                      <ChevronRight size={13} style={{ transform: open ? 'rotate(90deg)' : 'none', transition: 'transform .15s', flexShrink: 0 }} />
+                      <span title={s.cashier} style={{ width: 22, height: 22, borderRadius: 999, background: 'var(--pine-pale)', color: 'var(--pine)', fontSize: 10, fontWeight: 700, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>{initialsOf(s.cashier)}</span>
+                      <span style={{ textDecoration: s.voided ? 'line-through' : 'none', color: s.voided ? 'var(--muted)' : 'var(--ink)' }}>
+                        {new Date(s.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} · {items.length === 1 ? `${items[0].qty} x ${items[0].name}` : `${items.length} items`}
+                      </span>
+                      {pill(PAYMENT_LABELS[s.paymentMethod] || s.paymentMethod, 'var(--muted)', 'var(--bg)')}
+                      {s.voided && pill('Voided', 'var(--red)', 'var(--red-pale)')}
+                      {isUnpaid(s) && pill('Unpaid', 'var(--amber)', 'var(--amber-pale)')}
+                    </span>
+                    <span className="pos-mono" style={{ color: s.voided ? 'var(--muted)' : 'var(--ink)', textDecoration: s.voided ? 'line-through' : 'none', flexShrink: 0 }}>{formatMoney(s.total, currency)}</span>
+                  </div>
+                  {open && (
+                    <div style={{ padding: '2px 16px 14px 40px', fontSize: 12.5, color: 'var(--muted)' }}>
+                      {items.map((i) => (
+                        <div key={i.id} style={{ display: 'flex', justifyContent: 'space-between' }}>
+                          <span>{i.qty} x {i.name}</span><span className="pos-mono">{formatMoney(i.price * i.qty, currency)}</span>
+                        </div>
+                      ))}
+                      <div style={{ marginTop: 4 }}>Rung up by {s.cashier} · paid via {PAYMENT_LABELS[s.paymentMethod] || s.paymentMethod}{s.customerName ? ` — ${s.customerName}` : ''}{s.mpesaReceipt ? ` (${s.mpesaReceipt})` : ''}{s.paymentRef ? ` (${s.paymentRef})` : ''}</div>
+                      {!s.voided && lineProfit.known > 0 && <div style={{ marginTop: 2 }}>Profit <b className="pos-mono" style={{ color: lineProfit.profit < 0 ? 'var(--red)' : 'var(--pine)' }}>{formatMoney(lineProfit.profit, currency)}</b> (excl. VAT)</div>}
+                      {s.voided && <div style={{ marginTop: 4, color: 'var(--red)' }}>Voided by {s.voidedBy} on {new Date(s.voidedAt).toLocaleString()}{s.voidReason ? `: ${s.voidReason}` : ''}</div>}
+                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
+                        <button onClick={() => setReceiptSale(s)} style={{ background: '#fff', border: '1px solid var(--border)', color: 'var(--pine)', borderRadius: 7, padding: '6px 12px', fontSize: 12, fontWeight: 600 }}>View receipt</button>
+                        {!s.voided && voidSale && voidingId !== s.id && (
+                          <button onClick={() => { setVoidingId(s.id); setVoidReason(''); }} style={{ background: 'none', border: '1px solid var(--red)', color: 'var(--red)', borderRadius: 7, padding: '6px 12px', fontSize: 12 }}>Void this sale</button>
+                        )}
+                      </div>
+                      {!s.voided && voidSale && voidingId === s.id && (
+                        <div style={{ marginTop: 10, padding: 10, background: 'var(--red-pale)', borderRadius: 8 }}>
+                          <label style={{ fontSize: 11, color: '#7A2530' }}>Reason for reversing this sale</label>
+                          <input value={voidReason} onChange={(e) => setVoidReason(e.target.value)} placeholder="e.g. customer changed their mind"
+                            style={{ width: '100%', padding: '7px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 12, marginTop: 4, marginBottom: 8 }} />
+                          <div style={{ display: 'flex', gap: 8 }}>
+                            <button disabled={busy} onClick={() => confirmVoid(s.id)} style={{ flex: 1, padding: '7px 0', borderRadius: 7, border: 'none', background: 'var(--red)', color: '#fff', fontSize: 12, fontWeight: 600, opacity: busy ? 0.6 : 1 }}>{busy ? 'Voiding…' : 'Confirm void'}</button>
+                            <button onClick={() => setVoidingId(null)} style={{ flex: 1, padding: '7px 0', borderRadius: 7, border: '1px solid var(--border)', background: '#fff', fontSize: 12 }}>Cancel</button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ))}
+
+      {filtered.length > visible.length && (
+        <button onClick={() => setShown((n) => n + PAGE)} style={{ display: 'block', margin: '4px auto 0', padding: '10px 18px', borderRadius: 8, border: '1px solid var(--border)', background: '#fff', fontSize: 13, fontWeight: 600, color: 'var(--pine)' }}>
+          Show {Math.min(PAGE, filtered.length - visible.length)} more ({filtered.length - visible.length} left)
+        </button>
+      )}
+      {receiptSale && <ReceiptModal sale={receiptSale} settings={settings} onClose={() => setReceiptSale(null)} />}
     </div>
   );
 }
@@ -3513,6 +3650,10 @@ function AccountsTab({ sales, settings, settleAccountSale }) {
   const [query, setQuery] = useState('');
   const [mpesaPrompt, setMpesaPrompt] = useState(null); // { sale, name, phone }
   const [cardPrompt, setCardPrompt] = useState(null); // { sale, name }
+  const [sortBy, setSortBy] = useState('amount'); // amount | oldest
+  const [settleAllFor, setSettleAllFor] = useState(null);
+  const [settleAllBusy, setSettleAllBusy] = useState(false);
+  const ageDays = (s) => Math.max(0, Math.floor((Date.now() - new Date(s.timestamp)) / 86400000));
 
   const accountSales = sales.filter((s) => s.paymentMethod === 'account' && !s.voided);
   const outstanding = accountSales.filter((s) => !s.settled).sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
@@ -3520,12 +3661,18 @@ function AccountsTab({ sales, settings, settleAccountSale }) {
 
   const byCustomer = {};
   outstanding.forEach((s) => {
-    const key = s.customerName || 'Unknown customer';
-    if (!byCustomer[key]) byCustomer[key] = { name: key, phone: s.customerPhone, sales: [], total: 0 };
+    // Same phone = same customer, so two "John"s with different numbers stay separate.
+    const digits = toWhatsappDigits(s.customerPhone);
+    const key = digits ? `p:${digits}` : `n:${s.customerName || 'Unknown customer'}`;
+    if (!byCustomer[key]) byCustomer[key] = { key, name: s.customerName || 'Unknown customer', phone: s.customerPhone, sales: [], total: 0, oldestDays: 0 };
     byCustomer[key].sales.push(s);
     byCustomer[key].total += s.total;
+    byCustomer[key].oldestDays = Math.max(byCustomer[key].oldestDays, ageDays(s));
   });
-  const allCustomers = Object.values(byCustomer).sort((a, b) => b.total - a.total);
+  const allCustomers = Object.values(byCustomer).sort(sortBy === 'oldest' ? (a, b) => b.oldestDays - a.oldestDays : (a, b) => b.total - a.total);
+  const bucket = (lo, hi) => outstanding.filter((s) => ageDays(s) >= lo && ageDays(s) <= hi).reduce((sum, s) => sum + s.total, 0);
+  const monthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+  const collectedThisMonth = accountSales.filter((s) => s.settled && s.settledAt && new Date(s.settledAt) >= monthStart).reduce((sum, s) => sum + s.total, 0);
   const customers = allCustomers.filter((c) => c.name.toLowerCase().includes(query.toLowerCase()));
   const totalOutstanding = outstanding.reduce((sum, s) => sum + s.total, 0);
 
@@ -3569,15 +3716,24 @@ function AccountsTab({ sales, settings, settleAccountSale }) {
       <h2 className="pos-serif" style={{ fontSize: 20, fontWeight: 700, marginBottom: 6 }}>Customer accounts</h2>
       <p style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 16 }}>Sales rung up "on account" — track who owes what, and mark them settled once collected.</p>
 
-      <div style={{ marginBottom: 20 }}>
-        <StatCard label="Total outstanding" value={formatMoney(totalOutstanding, settings.currency)} accent={totalOutstanding ? 'var(--red)' : undefined} />
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 12, marginBottom: 20 }}>
+        <StatCard label="Total outstanding" value={formatMoney(totalOutstanding, settings.currency)} accent={totalOutstanding ? 'var(--red)' : undefined} sub={`${allCustomers.length} customer${allCustomers.length !== 1 ? 's' : ''}`} />
+        <StatCard label="Collected this month" value={formatMoney(collectedThisMonth, settings.currency)} accent="var(--pine)" />
+        <StatCard label="0–7 days" value={formatMoney(bucket(0, 7), settings.currency)} />
+        <StatCard label="8–30 days" value={formatMoney(bucket(8, 30), settings.currency)} accent={bucket(8, 30) ? 'var(--amber)' : undefined} />
+        <StatCard label="Over 30 days" value={formatMoney(bucket(31, Infinity), settings.currency)} accent={bucket(31, Infinity) ? 'var(--red)' : undefined} sub="chase these first" />
       </div>
 
       {allCustomers.length > 0 && (
-        <div style={{ position: 'relative', maxWidth: 320, marginBottom: 16 }}>
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', marginBottom: 16 }}>
+        <div style={{ position: 'relative', flex: '1 1 240px', maxWidth: 320 }}>
           <Search size={15} style={{ position: 'absolute', left: 11, top: 10, color: 'var(--muted)' }} />
           <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search by customer name"
             style={{ width: '100%', padding: '9px 12px 9px 32px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 13 }} />
+        </div>
+        {[['amount', 'Largest first'], ['oldest', 'Oldest first']].map(([k, l]) => (
+          <button key={k} onClick={() => setSortBy(k)} style={{ padding: '6px 11px', borderRadius: 999, fontSize: 12.5, fontWeight: 600, border: '1px solid ' + (sortBy === k ? 'var(--pine)' : 'var(--border)'), background: sortBy === k ? 'var(--pine)' : '#fff', color: sortBy === k ? '#fff' : 'var(--ink)' }}>{l}</button>
+        ))}
         </div>
       )}
 
@@ -3593,14 +3749,18 @@ function AccountsTab({ sales, settings, settleAccountSale }) {
         const waMessage = `Hi ${c.name}, this is a friendly reminder from ${settings.pharmacyName} that you have an outstanding balance of ${formatMoney(c.total, settings.currency)}. Kindly settle at your earliest convenience — thank you!`;
         const waLink = waDigits ? `https://wa.me/${waDigits}?text=${encodeURIComponent(waMessage)}` : null;
         return (
-        <div key={c.name} style={{ background: 'var(--paper)', border: '1px solid var(--border)', borderRadius: 12, padding: 16, marginBottom: 14 }}>
+        <div key={c.key} style={{ background: 'var(--paper)', border: '1px solid var(--border)', borderRadius: 12, padding: 16, marginBottom: 14 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, flexWrap: 'wrap', gap: 6 }}>
             <div>
               <div style={{ fontWeight: 600, fontSize: 14 }}>{c.name}</div>
               {c.phone && <div style={{ fontSize: 12, color: 'var(--muted)' }}>{c.phone}</div>}
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <span title="Age of the oldest unpaid sale" style={{ fontSize: 10.5, fontWeight: 700, padding: '2px 7px', borderRadius: 5, color: c.oldestDays > 30 ? 'var(--red)' : c.oldestDays > 7 ? 'var(--amber)' : 'var(--muted)', background: c.oldestDays > 30 ? 'var(--red-pale)' : c.oldestDays > 7 ? 'var(--amber-pale)' : 'var(--bg)' }}>{c.oldestDays}d old</span>
               <div className="pos-mono" style={{ fontWeight: 700, fontSize: 15, color: 'var(--red)' }}>{formatMoney(c.total, settings.currency)}</div>
+              {settleAccountSale && c.sales.length > 1 && (
+                <button onClick={() => setSettleAllFor(c)} title="Mark every unpaid sale for this customer as paid in cash" style={{ padding: '6px 10px', borderRadius: 7, border: '1px solid var(--pine)', background: '#fff', color: 'var(--pine)', fontSize: 11.5, fontWeight: 600 }}>Settle all (cash)</button>
+              )}
               {waLink ? (
                 <a href={waLink} target="_blank" rel="noopener noreferrer" title="Send a WhatsApp payment reminder" style={{
                   display: 'flex', alignItems: 'center', gap: 5, padding: '6px 10px', borderRadius: 7,
@@ -3615,7 +3775,7 @@ function AccountsTab({ sales, settings, settleAccountSale }) {
           </div>
           {c.sales.map((s) => (
             <div key={s.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12.5, padding: '8px 0', borderTop: '1px solid var(--border)', flexWrap: 'wrap', gap: 8 }}>
-              <span style={{ color: 'var(--muted)' }}>{new Date(s.timestamp).toLocaleDateString()} · {s.items.length} item{s.items.length !== 1 ? 's' : ''} · {s.cashier}</span>
+              <span style={{ color: 'var(--muted)' }}>{new Date(s.timestamp).toLocaleDateString()} ({ageDays(s)}d) · {s.items.length} item{s.items.length !== 1 ? 's' : ''} · {s.cashier}</span>
               <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <span className="pos-mono">{formatMoney(s.total, settings.currency)}</span>
                 {settleAccountSale && (
@@ -3652,6 +3812,21 @@ function AccountsTab({ sales, settings, settleAccountSale }) {
         </>
       )}
 
+      {settleAllFor && (
+        <ConfirmModal
+          title="Settle all in cash?"
+          message={`Mark ${settleAllFor.sales.length} unpaid sales for ${settleAllFor.name} (${formatMoney(settleAllFor.total, settings.currency)}) as paid in cash. Only do this once you have the cash in hand — card and M-Pesa payments are settled one sale at a time so each can be verified.`}
+          confirmLabel="Settle all"
+          busy={settleAllBusy}
+          onCancel={() => setSettleAllFor(null)}
+          onConfirm={async () => {
+            setSettleAllBusy(true);
+            for (const sale of settleAllFor.sales) await settleAccountSale(sale.id, 'cash');
+            setSettleAllBusy(false); setSettleAllFor(null);
+          }}
+        />
+      )}
+
       {cardPrompt && (
         <AccountCardModal
           customer={{ name: cardPrompt.name, total: cardPrompt.sale.total }}
@@ -3673,7 +3848,14 @@ function AccountsTab({ sales, settings, settleAccountSale }) {
   );
 }
 
-function StaffTab({ staffList, saveStaff }) {
+function StaffTab({ staffList, saveStaff, sales = [], settings = {} }) {
+  const now = new Date();
+  const statsFor = (name) => {
+    const mine = sales.filter((x) => x.cashier === name && !x.voided);
+    const today = mine.filter((x) => isSameDay(x.timestamp, now));
+    const last = mine.reduce((m, x) => (!m || new Date(x.timestamp) > new Date(m.timestamp) ? x : m), null);
+    return { count: today.length, total: today.reduce((sum, x) => sum + x.total, 0), last };
+  };
   const [name, setName] = useState('');
   const [pin, setPin] = useState('');
   const [editingId, setEditingId] = useState(null);
@@ -3752,7 +3934,7 @@ function StaffTab({ staffList, saveStaff }) {
 
   return (
     <div>
-      <h2 className="pos-serif" style={{ fontSize: 20, fontWeight: 700, marginBottom: 6 }}>Staff accounts</h2>
+      <PageHeader title="Staff accounts" subtitle="Who can sign in, what they can do, and how today is going for each of them." />
       <div style={{ marginBottom: 14 }}>
         <label style={{ fontSize: 12, color: 'var(--muted)' }}>Your admin PIN — required to add, edit, or remove a PIN below</label>
         <input type="password" inputMode="numeric" autoComplete="off" value={adminPin}
@@ -3773,7 +3955,17 @@ function StaffTab({ staffList, saveStaff }) {
             </div>
           ) : (
             <div key={s.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '11px 16px', borderBottom: '1px solid var(--border)', fontSize: 13, flexWrap: 'wrap', gap: 8 }}>
-              <span>{s.name} <span style={{ color: 'var(--muted)', fontSize: 11, textTransform: 'uppercase', marginLeft: 6 }}>{s.role}</span></span>
+              <span style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <span style={{ width: 32, height: 32, borderRadius: 999, background: 'var(--pine-pale)', color: 'var(--pine)', fontSize: 12, fontWeight: 700, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>{initialsOf(s.name)}</span>
+                <span>
+                  <span style={{ fontWeight: 600 }}>{s.name}</span>
+                  <span style={{ marginLeft: 8, fontSize: 10, fontWeight: 700, textTransform: 'uppercase', padding: '2px 6px', borderRadius: 5, color: s.role === 'admin' ? 'var(--pine)' : 'var(--muted)', background: s.role === 'admin' ? 'var(--pine-pale)' : 'var(--bg)' }}>{s.role}</span>
+                  {s.role !== 'admin' && (() => { const st = statsFor(s.name); return (
+                    <span style={{ display: 'block', fontSize: 11.5, color: 'var(--muted)', marginTop: 2 }}>
+                      Today: {st.count} sale{st.count !== 1 ? 's' : ''}{st.count ? ` · ${formatMoney(st.total, settings.currency)}` : ''}{st.last ? ` · last sale ${timeAgo(st.last.timestamp)}` : ' · no sales yet'}
+                    </span>); })()}
+                </span>
+              </span>
               <span style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
                 {s.role !== 'admin' && (
                   <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--muted)' }}>
@@ -3818,51 +4010,85 @@ function StaffTab({ staffList, saveStaff }) {
   );
 }
 
+function PageHeader({ title, subtitle, right }) {
+  return (
+    <div style={{ marginBottom: 16 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
+        <h2 className="pos-serif" style={{ fontSize: 20, fontWeight: 700 }}>{title}</h2>
+        {right}
+      </div>
+      {subtitle && <p style={{ fontSize: 13, color: 'var(--muted)', marginTop: 4 }}>{subtitle}</p>}
+    </div>
+  );
+}
+
 function SettingsTab({ settings, saveSettings }) {
   const [form, setForm] = useState({ ...settings });
+  const [saved, setSaved] = useState(false);
+  const [saving, setSaving] = useState(false);
   const dirty = JSON.stringify(form) !== JSON.stringify(settings);
+  const set = (k, v) => { setForm((f) => ({ ...f, [k]: v })); setSaved(false); };
+  const inp = { width: '100%', padding: '9px 10px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 13, marginTop: 3, background: '#fff' };
+  const field = (label, node, hint) => (
+    <div style={{ marginBottom: 14 }}>
+      <label style={{ fontSize: 12, color: 'var(--muted)' }}>{label}</label>
+      {node}
+      {hint && <p style={{ fontSize: 11, color: 'var(--muted)', marginTop: 4, lineHeight: 1.4 }}>{hint}</p>}
+    </div>
+  );
+  const card = (title, subtitle, children) => (
+    <div style={{ background: 'var(--paper)', border: '1px solid var(--border)', borderRadius: 12, padding: 18 }}>
+      <h3 className="pos-serif" style={{ fontSize: 15, fontWeight: 600 }}>{title}</h3>
+      <p style={{ fontSize: 12, color: 'var(--muted)', margin: '2px 0 14px' }}>{subtitle}</p>
+      {children}
+    </div>
+  );
+  const themeKey = form.theme || DEFAULT_THEME;
+  const save = async () => {
+    setSaving(true);
+    await saveSettings(form);
+    setSaving(false); setSaved(true);
+    setTimeout(() => setSaved(false), 2500);
+  };
+
   return (
-    <div>
-      <h2 className="pos-serif" style={{ fontSize: 20, fontWeight: 700, marginBottom: 16 }}>Settings</h2>
-      <div style={{ maxWidth: 340 }}>
-        <div style={{ marginBottom: 12 }}>
-          <label style={{ fontSize: 12, color: 'var(--muted)' }}>Pharmacy name</label>
-          <input value={form.pharmacyName} onChange={(e) => setForm({ ...form, pharmacyName: e.target.value })} style={{ width: '100%', padding: '9px 10px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 13, marginTop: 3 }} />
-        </div>
-        <div style={{ marginBottom: 12 }}>
-          <label style={{ fontSize: 12, color: 'var(--muted)' }}>Currency symbol</label>
-          <input value={form.currency} onChange={(e) => setForm({ ...form, currency: e.target.value })} style={{ width: '100%', padding: '9px 10px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 13, marginTop: 3 }} />
-        </div>
-        <div style={{ marginBottom: 16 }}>
-          <label style={{ fontSize: 12, color: 'var(--muted)' }}>Tax rate (%)</label>
-          <input type="number" value={form.taxRate} onChange={(e) => setForm({ ...form, taxRate: parseFloat(e.target.value) || 0 })} style={{ width: '100%', padding: '9px 10px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 13, marginTop: 3 }} />
-        </div>
-        <div style={{ marginBottom: 16 }}>
-          <label style={{ fontSize: 12, color: 'var(--muted)' }}>Auto logout after inactivity (minutes)</label>
-          <input type="number" min="0" value={form.sessionTimeoutMinutes} onChange={(e) => setForm({ ...form, sessionTimeoutMinutes: parseInt(e.target.value) || 0 })} style={{ width: '100%', padding: '9px 10px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 13, marginTop: 3 }} />
-          <p style={{ fontSize: 11, color: 'var(--muted)', marginTop: 4 }}>Cashiers and admins are logged out after this many minutes with no activity on a terminal. Set to 0 to disable.</p>
-        </div>
-        <div style={{ marginBottom: 16 }}>
-          <label style={{ fontSize: 12, color: 'var(--muted)' }}>Theme</label>
-          <div style={{ display: 'flex', gap: 10, marginTop: 6, flexWrap: 'wrap' }}>
+    <div style={{ maxWidth: 820 }}>
+      <PageHeader title="Settings" subtitle="Business details, sales rules, security and look. Changes apply to every till once saved." />
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 16, marginBottom: 16 }}>
+        {card('Business & receipts', 'Printed at the top and bottom of every receipt.', <>
+          {field('Pharmacy name', <input value={form.pharmacyName || ''} onChange={(e) => set('pharmacyName', e.target.value)} style={inp} />)}
+          {field('Address', <input value={form.address || ''} onChange={(e) => set('address', e.target.value)} placeholder="Optional" style={inp} />)}
+          {field('Phone', <input value={form.phone || ''} onChange={(e) => set('phone', e.target.value)} placeholder="Optional" style={inp} />)}
+          {field('Receipt footer', <input value={form.receiptFooter || ''} onChange={(e) => set('receiptFooter', e.target.value)} placeholder="Thank you — get well soon" style={inp} />)}
+        </>)}
+        {card('Sales', 'How money is shown and taxed.', <>
+          {field('Currency symbol', <input value={form.currency || ''} onChange={(e) => set('currency', e.target.value)} style={inp} />)}
+          {field('Tax rate (%)', <input type="number" value={form.taxRate} onChange={(e) => set('taxRate', parseFloat(e.target.value) || 0)} style={inp} />, 'Added on top of each sale. Profit figures exclude it.')}
+        </>)}
+        {card('Security', 'Keep unattended tills locked.', <>
+          {field('Auto logout after inactivity (minutes)', <input type="number" min="0" value={form.sessionTimeoutMinutes} onChange={(e) => set('sessionTimeoutMinutes', parseInt(e.target.value) || 0)} style={inp} />, 'Cashiers and admins are logged out after this long with no activity. Set to 0 to disable.')}
+        </>)}
+        {card('Appearance', 'Applies to every screen and every till.', (
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
             {Object.entries(THEMES).map(([key, t]) => (
-              <button key={key} type="button" onClick={() => setForm({ ...form, theme: key })} style={{
-                display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, padding: '10px 12px',
-                borderRadius: 10, border: (form.theme || DEFAULT_THEME) === key ? '2px solid var(--pine)' : '1px solid var(--border)',
-                background: '#fff', minWidth: 78
+              <button key={key} type="button" onClick={() => set('theme', key)} style={{
+                display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, padding: '10px 12px', borderRadius: 10, minWidth: 78, background: '#fff',
+                border: themeKey === key ? '2px solid var(--pine)' : '1px solid var(--border)'
               }}>
                 <div style={{ display: 'flex', gap: 3 }}>
-                  {t.swatch.map((c, i) => (
-                    <span key={i} style={{ width: 14, height: 14, borderRadius: '50%', background: c, border: '1px solid rgba(0,0,0,0.08)' }} />
-                  ))}
+                  {t.swatch.map((c, i) => <span key={i} style={{ width: 14, height: 14, borderRadius: '50%', background: c, border: '1px solid rgba(0,0,0,0.08)' }} />)}
                 </div>
-                <span style={{ fontSize: 11.5, fontWeight: (form.theme || DEFAULT_THEME) === key ? 700 : 500 }}>{t.label}</span>
+                <span style={{ fontSize: 11.5, fontWeight: themeKey === key ? 700 : 500 }}>{t.label}</span>
               </button>
             ))}
           </div>
-          <p style={{ fontSize: 11, color: 'var(--muted)', marginTop: 6 }}>Applies to every screen and every till once saved.</p>
-        </div>
-        <button disabled={!dirty} onClick={() => saveSettings(form)} style={{ padding: '10px 20px', borderRadius: 10, border: 'none', background: dirty ? 'var(--pine)' : '#B9C4B4', color: '#fff', fontWeight: 600 }}>Save changes</button>
+        ))}
+      </div>
+      <div style={{ position: 'sticky', bottom: 0, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 12, padding: '12px 0', background: 'var(--bg)' }}>
+        {dirty && <span style={{ fontSize: 12.5, color: 'var(--amber)', fontWeight: 600 }}>Unsaved changes</span>}
+        {saved && !dirty && <span style={{ fontSize: 12.5, color: 'var(--pine)', fontWeight: 600 }}>✓ Saved</span>}
+        {dirty && <button onClick={() => setForm({ ...settings })} style={{ padding: '10px 16px', borderRadius: 10, border: '1px solid var(--border)', background: '#fff', fontSize: 13 }}>Discard</button>}
+        <button disabled={!dirty || saving} onClick={save} style={{ padding: '10px 20px', borderRadius: 10, border: 'none', background: dirty ? 'var(--pine)' : '#B9C4B4', color: '#fff', fontWeight: 600, opacity: saving ? 0.6 : 1 }}>{saving ? 'Saving…' : 'Save changes'}</button>
       </div>
     </div>
   );
