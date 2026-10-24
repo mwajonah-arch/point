@@ -939,6 +939,74 @@ ${t.fontImport}
   .pco-spinner { animation-duration: 2s; }
 }
 
+/* ---- Cashier screen ---- */
+.pcs-search { position: relative; flex: 1 1 260px; }
+.pcs-search-icon { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: var(--muted); pointer-events: none; }
+.pcs-search input { width: 100%; padding: 11px 38px 11px 36px; border-radius: 10px; border: 1px solid var(--border); background: #fff; font-size: 14px; color: var(--ink); }
+.pcs-search input:focus-visible { outline: 2px solid var(--pine-light); outline-offset: 1px; }
+.pcs-search-clear { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); color: var(--muted); }
+.pcs-kbd { position: absolute; right: 10px; top: 50%; transform: translateY(-50%); font-size: 11px; line-height: 1.5; padding: 0 6px; border: 1px solid var(--border); border-radius: 5px; background: var(--paper); color: var(--muted); pointer-events: none; }
+.pcs-scan { display: flex; align-items: center; gap: 8px; padding: 0 16px; border-radius: 10px; border: 1px solid var(--border); background: #fff; color: var(--ink); font-size: 13.5px; font-weight: 500; }
+.pcs-scan:hover { background: var(--paper); }
+
+.pcs-chips { display: flex; gap: 6px; overflow-x: auto; padding: 2px 0 12px; }
+.pcs-chip { flex: 0 0 auto; padding: 7px 13px; border-radius: 999px; border: 1px solid var(--border); background: #fff; color: var(--ink); font-size: 12.5px; font-weight: 500; white-space: nowrap; transition: background-color 0.12s ease; }
+.pcs-chip:hover:not([aria-pressed="true"]) { background: var(--paper); }
+.pcs-chip[aria-pressed="true"] { background: var(--pine); border-color: var(--pine); color: #fff; font-weight: 600; }
+
+.pcs-section-label { font-size: 12.5px; font-weight: 600; color: var(--muted); margin-bottom: 8px; }
+.pcs-quick { display: flex; gap: 8px; overflow-x: auto; padding: 2px 0 6px; margin-bottom: 10px; }
+.pcs-quick-btn { flex: 0 0 auto; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; min-width: 116px; padding: 9px 12px; border-radius: 10px; border: 1px solid var(--border); background: #fff; text-align: left; transition: background-color 0.2s ease, border-color 0.2s ease; }
+.pcs-quick-btn:hover { border-color: var(--pine-light); }
+.pcs-quick-btn[data-flash="true"] { border-color: var(--pine); background: var(--pine-pale); }
+
+.pcs-results { font-size: 12.5px; color: var(--muted); margin: -2px 0 10px; }
+.pcs-link { background: none; border: none; padding: 6px 8px; border-radius: 7px; font-size: 12.5px; font-weight: 500; color: var(--pine); }
+.pcs-link:hover { background: var(--pine-pale); }
+
+.pcs-tile { position: relative; display: flex; flex-direction: column; min-height: 112px; text-align: left; background: #fff; border: 1px solid var(--border); border-radius: 12px; padding: 13px 13px 11px; cursor: pointer; transition: border-color 0.12s ease, box-shadow 0.12s ease, transform 0.08s ease; }
+.pcs-tile:hover:not(.pcs-out) { border-color: var(--pine-light); box-shadow: 0 2px 10px rgba(22,66,60,0.10); }
+.pcs-tile:active:not(.pcs-out) { transform: scale(0.985); }
+.pcs-tile:focus-visible { outline: 2px solid var(--pine-light); outline-offset: 2px; }
+.pcs-out { opacity: 0.55; cursor: not-allowed; background: var(--paper); }
+.pcs-incart { border-color: var(--pine); box-shadow: inset 0 0 0 1px var(--pine); }
+.pcs-badge { position: absolute; top: -8px; left: 12px; background: var(--pine); color: #fff; font-size: 11px; font-weight: 600; padding: 1px 8px; border-radius: 999px; }
+.pcs-rx { align-self: flex-start; font-size: 10px; font-weight: 700; color: var(--amber); border: 1px solid var(--amber); border-radius: 5px; padding: 1px 5px; margin-bottom: 5px; }
+.pcs-name { font-size: 15px; font-weight: 600; line-height: 1.25; padding-right: 22px; margin-bottom: 2px; }
+.pcs-meta { font-size: 10.5px; color: var(--muted); margin-bottom: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pcs-foot { margin-top: auto; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 4px 8px; }
+.pcs-price { font-size: 15px; font-weight: 500; white-space: nowrap; }
+.pcs-stock { font-size: 11px; font-weight: 600; padding: 2px 7px; border-radius: 6px; white-space: nowrap; }
+.pcs-stock-ok { background: var(--pine-pale); color: var(--pine); }
+.pcs-stock-low { background: var(--amber-pale); color: var(--amber); }
+.pcs-stock-out { background: var(--red-pale); color: var(--red); }
+
+.pcs-cart-head { padding: 14px 14px 14px 18px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
+.pcs-count { font-size: 11.5px; font-weight: 600; padding: 1px 8px; border-radius: 999px; background: var(--pine-pale); color: var(--pine); }
+.pcs-line { padding: 12px 0; border-bottom: 1px solid var(--border); }
+.pcs-line-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
+.pcs-line-name { font-size: 13.5px; font-weight: 500; line-height: 1.3; }
+.pcs-unit { font-size: 11.5px; color: var(--muted); margin-top: 2px; }
+.pcs-line-bottom { display: flex; align-items: center; justify-content: space-between; margin-top: 8px; }
+.pcs-step { display: inline-flex; align-items: center; border: 1px solid var(--border); border-radius: 9px; background: #fff; overflow: hidden; }
+.pcs-step button { width: 34px; height: 32px; border: none; background: none; display: flex; align-items: center; justify-content: center; color: var(--ink); }
+.pcs-step button:hover:not(:disabled) { background: var(--pine-pale); }
+.pcs-step button:disabled { color: #B9C4B4; cursor: not-allowed; }
+.pcs-step span { min-width: 30px; text-align: center; font-size: 14px; font-weight: 600; }
+
+.pcs-charge { width: 100%; padding: 14px 0; border: none; border-radius: 11px; background: var(--pine); color: #fff; font-size: 15.5px; font-weight: 600; display: flex; align-items: center; justify-content: center; gap: 10px; transition: background-color 0.12s ease; }
+.pcs-charge:hover:not(:disabled) { background: var(--pine-light); }
+.pcs-charge:disabled { background: #B9C4B4; cursor: not-allowed; }
+.pcs-charge kbd { font: inherit; font-size: 11px; opacity: 0.8; border: 1px solid rgba(255,255,255,0.45); border-radius: 5px; padding: 0 5px; }
+
+.pcs-chip:focus-visible, .pcs-scan:focus-visible, .pcs-quick-btn:focus-visible, .pcs-step button:focus-visible, .pcs-charge:focus-visible, .pcs-link:focus-visible { outline: 2px solid var(--pine-light); outline-offset: 2px; }
+
+@media (max-width: 860px) {
+  .pcs-kbd, .pcs-charge kbd { display: none; }
+  .pcs-step button { width: 40px; height: 38px; }
+  .pcs-scan { padding: 0 14px; min-height: 42px; }
+}
+
 /* Structural classes (kept plain on desktop, overridden below on mobile) */
 .pos-topbar { display: flex; align-items: center; justify-content: space-between; padding: 14px 24px; background: var(--pine); color: #fff; flex-wrap: wrap; gap: 8px; }
 .pos-topbar-right { display: flex; align-items: center; gap: 16px; }
@@ -1279,8 +1347,23 @@ function StaffPOS({ inventory, sales, settings, user, addSale, updateStock, last
   useEffect(() => () => { if (flashTimer.current) clearTimeout(flashTimer.current); }, []);
   useEffect(() => () => { if (scanNoticeTimer.current) clearTimeout(scanNoticeTimer.current); }, []);
 
+  const searchRef = useRef(null);
+  const lastKeyRef = useRef(0);
+
+  // Short toast at the bottom of the screen (shares the scan-notice slot).
+  const notify = (msg) => {
+    setScanNotice(msg);
+    if (scanNoticeTimer.current) clearTimeout(scanNoticeTimer.current);
+    scanNoticeTimer.current = setTimeout(() => setScanNotice(''), 3000);
+  };
+
   const addToCart = (product, expired = false) => {
     if (product.stock <= 0) return;
+    const inCart = cart.find((i) => i.id === product.id);
+    if (inCart && inCart.qty >= product.stock) {
+      notify(`Only ${product.stock} of ${product.name} in stock, and they're all in the cart.`);
+      return;
+    }
     setCart((c) => {
       const existing = c.find((i) => i.id === product.id);
       if (existing) {
@@ -1351,7 +1434,31 @@ function StaffPOS({ inventory, sales, settings, user, addSale, updateStock, last
   const scannerListening = !checkoutOpen && !summaryOpen && !inventoryOpen && !accountsOpen && !drugInfoProduct && !scannerOpen && !expiredConfirm;
   useBarcodeScanner(handleBarcodeScan, scannerListening);
 
+  // F2 opens checkout, "/" jumps to the search box (when not already typing).
+  useEffect(() => {
+    const onKey = (e) => {
+      if (!scannerListening) return;
+      const tag = (e.target && e.target.tagName) || '';
+      const typing = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
+      if (e.key === 'F2' && cart.length > 0) {
+        e.preventDefault();
+        setCheckoutOpen(true);
+        setCartOpen(false);
+      } else if (e.key === '/' && !typing && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        e.preventDefault();
+        if (searchRef.current) searchRef.current.focus();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [scannerListening, cart.length]);
+
   const changeQty = (id, delta) => {
+    const line = cart.find((i) => i.id === id);
+    if (line && delta > 0 && line.qty >= line.maxStock) {
+      notify(`Only ${line.maxStock} of ${line.name} in stock.`);
+      return;
+    }
     setCart((c) => c.map((i) => {
       if (i.id !== id) return i;
       const next = i.qty + delta;
@@ -1362,6 +1469,35 @@ function StaffPOS({ inventory, sales, settings, user, addSale, updateStock, last
   };
 
   const removeFromCart = (id) => setCart((c) => c.filter((i) => i.id !== id));
+  const clearCart = () => { if (cart.length > 0 && window.confirm('Remove all items from this sale?')) setCart([]); };
+
+  const cartQty = useMemo(() => {
+    const m = {};
+    for (const i of cart) m[i.id] = i.qty;
+    return m;
+  }, [cart]);
+  const unitCount = cart.reduce((n, i) => n + i.qty, 0);
+
+  // Enter in the search box rings up an exact SKU match, or the only product
+  // left after filtering. A scanner "types" its digits in a rapid burst, so a
+  // very short gap before Enter means the scanner hook below is handling it —
+  // skipping it here stops the same item being added twice.
+  const onSearchKeyDown = (e) => {
+    const now = Date.now();
+    const gap = now - lastKeyRef.current;
+    lastKeyRef.current = now;
+    if (e.key === 'Escape') { setQuery(''); return; }
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    if (gap < 80) return;
+    const q = query.trim().toLowerCase();
+    if (!q) return;
+    const target = inventory.find((p) => p.sku && p.sku.toLowerCase() === q) || (filtered.length === 1 ? filtered[0] : null);
+    if (!target) { notify(filtered.length ? 'Several products match. Tap the one you want.' : 'No product matches that search.'); return; }
+    if (target.stock <= 0) { notify(`${target.name} is out of stock.`); return; }
+    requestAddToCart(target);
+    setQuery('');
+  };
 
   const subtotal = cart.reduce((s, i) => s + i.price * i.qty, 0);
   const tax = subtotal * (settings.taxRate / 100);
@@ -1449,46 +1585,41 @@ function StaffPOS({ inventory, sales, settings, user, addSale, updateStock, last
               </div>
             )}
 
-            <div style={{ fontSize: 12, opacity: 0.85 }}>{cart.length} item{cart.length !== 1 ? 's' : ''} in cart</div>
           </div>
         } />
 
       <div className="pos-staff-layout">
         {/* Product browser */}
         <div className="pos-product-panel pos-scroll">
-          <div className="pos-filter-row">
-            <div style={{ position: 'relative', flex: '1 1 240px' }}>
-              <Search size={16} style={{ position: 'absolute', left: 12, top: 11, color: 'var(--muted)' }} />
+          <div className="pos-filter-row" style={{ marginBottom: 10 }}>
+            <div className="pcs-search">
+              <Search size={16} className="pcs-search-icon" />
               <input
-                value={query} onChange={(e) => setQuery(e.target.value)}
-                placeholder="Search by name or SKU"
-                style={{ width: '100%', padding: '10px 12px 10px 34px', borderRadius: 10, border: '1px solid var(--border)', background: '#fff', fontSize: 14 }}
+                ref={searchRef} value={query} onChange={(e) => setQuery(e.target.value)} onKeyDown={onSearchKeyDown}
+                placeholder="Search by name or SKU" aria-label="Search products" autoComplete="off"
               />
+              {query
+                ? <button type="button" className="pos-icon-btn pcs-search-clear" onClick={() => { setQuery(''); if (searchRef.current) searchRef.current.focus(); }} title="Clear search" aria-label="Clear search"><X size={15} /></button>
+                : <span className="pcs-kbd" aria-hidden="true">/</span>}
             </div>
-            <select value={category} onChange={(e) => setCategory(e.target.value)} style={{ padding: '10px 12px', borderRadius: 10, border: '1px solid var(--border)', background: '#fff', fontSize: 14 }}>
-              {categories.map((c) => <option key={c} value={c}>{c}</option>)}
-            </select>
-            <button onClick={() => setScannerOpen(true)} title="Scan a barcode with the camera — or just fire a USB/Bluetooth scanner any time" style={{
-              display: 'flex', alignItems: 'center', gap: 8, padding: '0 14px', borderRadius: 10,
-              border: '1px solid var(--border)', background: '#fff', color: 'var(--ink)', fontSize: 13
-            }}>
-              <Camera size={15} color="var(--pine)" />
+            <button type="button" className="pcs-scan" onClick={() => setScannerOpen(true)} title="Scan a barcode with the camera — or just fire a USB/Bluetooth scanner any time">
+              <Camera size={16} color="var(--pine)" />
               Scan
             </button>
           </div>
 
+          <div className="pcs-chips pos-scroll" role="group" aria-label="Filter by category">
+            {categories.map((c) => (
+              <button key={c} type="button" className="pcs-chip" aria-pressed={category === c} onClick={() => setCategory(c)}>{c}</button>
+            ))}
+          </div>
+
           {showFrequentRow && (
-            <div style={{ marginBottom: 16 }}>
-              <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5, color: 'var(--muted)', marginBottom: 8 }}>Frequently sold</div>
-              <div className="pos-scroll" style={{ display: 'flex', gap: 8, overflowX: 'auto', paddingBottom: 4 }}>
+            <div>
+              <div className="pcs-section-label">Frequently sold</div>
+              <div className="pcs-quick pos-scroll">
                 {frequentProducts.map((p) => (
-                  <button key={p.id} onClick={() => requestAddToCart(p)} style={{
-                    flex: '0 0 auto', display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 2,
-                    padding: '8px 12px', borderRadius: 9, minWidth: 112, textAlign: 'left',
-                    border: flashId === p.id ? '1px solid var(--pine)' : '1px solid var(--border)',
-                    background: flashId === p.id ? 'var(--pine-pale)' : '#fff',
-                    transition: 'background-color 0.2s ease, border-color 0.2s ease'
-                  }}>
+                  <button key={p.id} type="button" className="pcs-quick-btn" data-flash={flashId === p.id} onClick={() => requestAddToCart(p)}>
                     <span style={{ fontSize: 12.5, fontWeight: 600, lineHeight: 1.25 }}>{p.name}</span>
                     <span className="pos-mono" style={{ fontSize: 11.5, color: 'var(--muted)' }}>{formatMoney(p.price, settings.currency)}</span>
                   </button>
@@ -1497,45 +1628,48 @@ function StaffPOS({ inventory, sales, settings, user, addSale, updateStock, last
             </div>
           )}
 
+          {(query || category !== 'All') && (
+            <div className="pcs-results">
+              {filtered.length} of {inventory.length} products
+              <button type="button" className="pcs-link" onClick={() => { setQuery(''); setCategory('All'); }}>Show all</button>
+            </div>
+          )}
+
           <div className="pos-product-grid">
             {filtered.map((p) => {
               const low = p.stock <= p.reorderLevel;
               const out = p.stock <= 0;
+              const inCart = cartQty[p.id] || 0;
+              const allInCart = !out && inCart >= p.stock;
               const expDays = daysUntilExpiry(p.expiry);
               const expiringSoon = expDays !== null && expDays <= EXPIRY_WINDOW_DAYS;
+              const stockLabel = out ? 'Out of stock' : allInCart ? 'All in cart' : low ? `${p.stock} left` : `${p.stock} in stock`;
               return (
-                <div key={p.id} onClick={() => !out && requestAddToCart(p)} role="button" tabIndex={0} style={{
-                  textAlign: 'left', background: 'var(--paper)', border: '1px dashed var(--border)',
-                  borderRadius: 10, padding: '14px 14px 12px', position: 'relative',
-                  opacity: out ? 0.5 : 1, cursor: out ? 'not-allowed' : 'pointer'
-                }}>
+                <div key={p.id}
+                  className={'pcs-tile' + (out ? ' pcs-out' : '') + (inCart ? ' pcs-incart' : '')}
+                  onClick={() => !out && requestAddToCart(p)}
+                  onKeyDown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && e.target === e.currentTarget) { e.preventDefault(); if (!out) requestAddToCart(p); } }}
+                  role="button" tabIndex={out ? -1 : 0} aria-disabled={out}
+                  aria-label={`${p.name}, ${formatMoney(p.price, settings.currency)}, ${out ? 'out of stock' : p.stock + ' in stock'}${inCart ? `, ${inCart} in cart` : ''}`}>
+                  {inCart > 0 && <span className="pcs-badge">{inCart} in cart</span>}
                   {flashId === p.id && (
                     <div style={{
-                      position: 'absolute', inset: 0, borderRadius: 10, background: 'rgba(22,66,60,0.88)',
+                      position: 'absolute', inset: 0, borderRadius: 12, background: 'rgba(22,66,60,0.88)',
                       display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, color: '#fff',
                       fontSize: 13, fontWeight: 600, pointerEvents: 'none'
                     }}>
                       <CheckCircle size={16} /> Added
                     </div>
                   )}
-                  <button className="pos-icon-btn" onClick={(e) => { e.stopPropagation(); setDrugInfoProduct(p); }} title="AI dosage / side effects / interactions lookup" style={{
+                  <button type="button" className="pos-icon-btn" onClick={(e) => { e.stopPropagation(); setDrugInfoProduct(p); }} title="AI dosage / side effects / interactions lookup" aria-label={`Drug information for ${p.name}`} style={{
                     position: 'absolute', top: 6, right: 6, color: 'var(--muted)', opacity: 0.6
                   }}><Info size={13} /></button>
-                  {p.requiresRx && (
-                    <span style={{
-                      fontSize: 10, fontWeight: 700, color: 'var(--amber)', border: '1px solid var(--amber)',
-                      borderRadius: 5, padding: '1px 5px', marginBottom: 4, display: 'inline-block'
-                    }}>℞ Rx</span>
-                  )}
-                  <div className="pos-serif" style={{ fontSize: 15, fontWeight: 600, marginBottom: 3, lineHeight: 1.25, paddingRight: 18 }}>{p.name}</div>
-                  <div className="pos-mono" style={{ fontSize: 10.5, color: 'var(--muted)', marginBottom: 8 }}>{p.category} · {p.sku}</div>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                    <span className="pos-mono" style={{ fontSize: 15, fontWeight: 500 }}>{formatMoney(p.price, settings.currency)}</span>
-                    <span style={{
-                      fontSize: 11, fontWeight: 600, padding: '2px 7px', borderRadius: 6,
-                      background: out ? 'var(--red-pale)' : low ? 'var(--amber-pale)' : 'var(--pine-pale)',
-                      color: out ? 'var(--red)' : low ? 'var(--amber)' : 'var(--pine)'
-                    }}>{out ? 'Out of stock' : low ? `${p.stock} left` : `${p.stock} in stock`}</span>
+                  {p.requiresRx && <span className="pcs-rx">℞ Rx</span>}
+                  <div className="pos-serif pcs-name">{p.name}</div>
+                  <div className="pos-mono pcs-meta">{p.category} · {p.sku}</div>
+                  <div className="pcs-foot">
+                    <span className="pos-mono pcs-price">{formatMoney(p.price, settings.currency)}</span>
+                    <span className={'pcs-stock ' + (out ? 'pcs-stock-out' : (low || allInCart) ? 'pcs-stock-low' : 'pcs-stock-ok')}>{stockLabel}</span>
                   </div>
                   {expiringSoon && (
                     <div style={{ marginTop: 6, fontSize: 10.5, fontWeight: 600, color: expDays < 0 ? 'var(--red)' : 'var(--amber)' }}>
@@ -1543,7 +1677,6 @@ function StaffPOS({ inventory, sales, settings, user, addSale, updateStock, last
                     </div>
                   )}
                 </div>
-
               );
             })}
             {filtered.length === 0 && (
@@ -1556,48 +1689,59 @@ function StaffPOS({ inventory, sales, settings, user, addSale, updateStock, last
 
         {/* Cart — a fixed sidebar on desktop, a full-screen drawer on mobile */}
         <div className={'pos-cart-panel' + (cartOpen ? ' pos-cart-open' : '')}>
-          <div style={{ padding: '16px 18px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div className="pcs-cart-head">
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <ShoppingCart size={16} />
               <span className="pos-serif" style={{ fontWeight: 600, fontSize: 15 }}>Current sale</span>
+              {cart.length > 0 && <span className="pcs-count">{unitCount} item{unitCount !== 1 ? 's' : ''}</span>}
             </div>
-            <button className="pos-cart-close-btn pos-icon-btn" onClick={() => setCartOpen(false)} title="Close cart" style={{ color: 'var(--muted)' }}>
-              <X size={20} />
-            </button>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+              {cart.length > 0 && <button type="button" className="pcs-link" onClick={clearCart}>Clear</button>}
+              <button type="button" className="pos-cart-close-btn pos-icon-btn" onClick={() => setCartOpen(false)} title="Close cart" aria-label="Close cart" style={{ color: 'var(--muted)' }}>
+                <X size={20} />
+              </button>
+            </div>
           </div>
-          <div style={{ flex: 1, overflowY: 'auto', padding: '10px 16px' }} className="pos-scroll">
-            {cart.length === 0 && <EmptyState icon={ShoppingCart} title="Cart is empty" subtitle="Tap a product to add it to the sale." />}
+          <div style={{ flex: 1, overflowY: 'auto', padding: '4px 16px' }} className="pos-scroll">
+            {cart.length === 0 && <EmptyState icon={ShoppingCart} title="Cart is empty" subtitle="Tap a product, scan a barcode, or type a SKU and press Enter." />}
             {cart.map((i) => (
-              <div key={i.id} style={{ padding: '10px 0', borderBottom: '1px solid var(--border)' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
-                  <span style={{ fontSize: 13, fontWeight: 500 }}>{i.name}{i.requiresRx ? ' ℞' : ''}</span>
-                  <button className="pos-icon-btn pos-icon-btn-danger" onClick={() => removeFromCart(i.id)} title="Remove from cart" style={{ color: 'var(--muted)' }}><Trash2 size={13} /></button>
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <button onClick={() => changeQty(i.id, -1)} style={{ width: 22, height: 22, borderRadius: 6, border: '1px solid var(--border)', background: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Minus size={12} /></button>
-                    <span className="pos-mono" style={{ fontSize: 13, minWidth: 16, textAlign: 'center' }}>{i.qty}</span>
-                    <button onClick={() => changeQty(i.id, 1)} style={{ width: 22, height: 22, borderRadius: 6, border: '1px solid var(--border)', background: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Plus size={12} /></button>
+              <div key={i.id} className="pcs-line">
+                <div className="pcs-line-top">
+                  <div>
+                    <div className="pcs-line-name">{i.name}{i.requiresRx ? ' ℞' : ''}</div>
+                    <div className="pcs-unit pos-mono">{formatMoney(i.price, settings.currency)} each</div>
                   </div>
-                  <span className="pos-mono" style={{ fontSize: 13 }}>{formatMoney(i.price * i.qty, settings.currency)}</span>
+                  <button type="button" className="pos-icon-btn pos-icon-btn-danger" onClick={() => removeFromCart(i.id)} title="Remove from cart" aria-label={`Remove ${i.name}`} style={{ color: 'var(--muted)' }}><Trash2 size={14} /></button>
+                </div>
+                <div className="pcs-line-bottom">
+                  <div className="pcs-step">
+                    <button type="button" onClick={() => changeQty(i.id, -1)} disabled={i.qty <= 1} aria-label={`Fewer ${i.name}`}><Minus size={14} /></button>
+                    <span className="pos-mono">{i.qty}</span>
+                    <button type="button" onClick={() => changeQty(i.id, 1)} disabled={i.qty >= i.maxStock} aria-label={`More ${i.name}`}><Plus size={14} /></button>
+                  </div>
+                  <span className="pos-mono" style={{ fontSize: 14, fontWeight: 500 }}>{formatMoney(i.price * i.qty, settings.currency)}</span>
                 </div>
               </div>
             ))}
           </div>
           <div style={{ padding: '14px 18px', borderTop: '1px solid var(--border)' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, color: 'var(--muted)', marginBottom: 4 }}>
-              <span>Subtotal</span><span className="pos-mono">{formatMoney(subtotal, settings.currency)}</span>
+            {settings.taxRate > 0 && (
+              <>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, color: 'var(--muted)', marginBottom: 4 }}>
+                  <span>Subtotal</span><span className="pos-mono">{formatMoney(subtotal, settings.currency)}</span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, color: 'var(--muted)', marginBottom: 8 }}>
+                  <span>Tax ({settings.taxRate}%)</span><span className="pos-mono">{formatMoney(tax, settings.currency)}</span>
+                </div>
+              </>
+            )}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', fontSize: 18, fontWeight: 700, marginBottom: 12 }}>
+              <span className="pos-serif">Total</span><span className="pos-mono" style={{ fontSize: 22 }}>{formatMoney(total, settings.currency)}</span>
             </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, color: 'var(--muted)', marginBottom: 8 }}>
-              <span>Tax ({settings.taxRate}%)</span><span className="pos-mono">{formatMoney(tax, settings.currency)}</span>
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 18, fontWeight: 700, marginBottom: 12 }}>
-              <span className="pos-serif">Total</span><span className="pos-mono">{formatMoney(total, settings.currency)}</span>
-            </div>
-            <button onClick={() => { setCheckoutOpen(true); setCartOpen(false); }} disabled={cart.length === 0} style={{
-              width: '100%', padding: '12px 0', borderRadius: 10, border: 'none',
-              background: cart.length === 0 ? '#B9C4B4' : 'var(--pine)', color: '#fff', fontWeight: 600, fontSize: 15
-            }}>Charge {cart.length > 0 ? formatMoney(total, settings.currency) : ''}</button>
+            <button type="button" className="pcs-charge" onClick={() => { setCheckoutOpen(true); setCartOpen(false); }} disabled={cart.length === 0} title="Shortcut: F2">
+              Charge {cart.length > 0 ? formatMoney(total, settings.currency) : ''}
+              {cart.length > 0 && <kbd>F2</kbd>}
+            </button>
           </div>
         </div>
 
