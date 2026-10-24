@@ -1,100 +1,44 @@
-# Medipoint Point of Sale System
+# Medipoint Point of Sale
 
-A React-based Point of Sale system for pharmacies and medical stores, integrated with Supabase and M-Pesa payment processing.
+A React point-of-sale system for pharmacies and medical stores, backed by Supabase,
+with M-Pesa and card payments. It runs in the browser; Netlify builds and hosts it.
 
-## Features
-- Inventory management
-- Sales processing
-- M-Pesa payment integration
-- Staff management
-- Sales reporting
-- Real-time data synchronization across devices
+## Setup
 
-## Setup Instructions
+1. **Supabase.** Create a project, then put its URL and anon key in `config.js`.
+2. **Database.** In the Supabase SQL Editor, run (in this order) `supabase-setup.sql`,
+   `inventory-migration.sql`, `staff-pins-setup.sql` and, for M-Pesa prompts, `mpesa-setup.sql`.
+   For automatic till-payment detection also run `mpesa-c2b-setup.sql`.
+3. **Edge Functions.** Deploy everything in `supabase/functions/`
+   (`supabase functions deploy <name>`). Set the secrets each one needs; M-Pesa
+   prompts are explained in `MPESA-SETUP.md`, till payments in `TILL-PAYMENTS-SETUP.md`.
+   `mpesa-callback` and `till-payments` must be deployed with **Verify JWT off**.
 
-### 1. Configure Supabase
-1. Create a Supabase project at [supabase.com](https://supabase.com)
-2. Get your Project URL and anon public key from Settings > API
-3. Update `config.js` with your Supabase credentials:
-   ```javascript
-   window.SUPABASE_URL = "your-project-url.supabase.co";
-   window.SUPABASE_ANON_KEY = "your-anon-public-key";
-   ```
+## Running and deploying
 
-### 2. Setup M-Pesa (Optional)
-To enable M-Pesa payments, you need to:
-1. Create a Safaricom Daraja developer account
-2. Get your consumer key and secret
-3. Set these as secrets in your Supabase project:
-   - `MPESA_CONSUMER_KEY`
-   - `MPESA_CONSUMER_SECRET`
-   - `MPESA_SHORTCODE` (your Till Number or Paybill)
-   - `MPESA_PASSKEY`
-   - `MPESA_CALLBACK_URL` (your Supabase function URL)
+- **Locally:** `npm run dev`, then open http://localhost:3000 (compiles in the browser; fine for development).
+- **Deploying:** `npm run build` compiles and minifies the app into `dist/`. Netlify runs this
+  automatically (`netlify.toml`). To test the production build locally: `npm run build && npm run preview`.
 
-### 3. Database Setup
-Run the SQL in `supabase/migrations/20240101_create_mpesa_table.sql` to create the M-Pesa transactions table.
+## Project layout
 
-### 4. Deploy Supabase Functions
-Deploy the M-Pesa functions to your Supabase project:
-- `supabase-functions/mpesa-stk-push`
-- `supabase-functions/mpesa-callback`
-- `supabase-functions/mpesa-check-status`
+- `index.html`, `app.js`: the app (one React file; `index.html` is the development page)
+- `config.js`: your Supabase URL and anon key
+- `build.js`: production build (esbuild); produces `dist/`
+- `supabase/functions/`: server-side code (payments, stock changes, staff login, till payments)
+- `*.sql`: database setup scripts
 
-You can deploy them using:
-```bash
-supabase functions deploy mpesa-stk-push
-supabase functions deploy mpesa-callback
-supabase functions deploy mpesa-check-status
-```
+## How it works
 
-### 5. Run the Application
-The application is designed to run in a web browser without a build step. To avoid CORS issues when making requests to Supabase, you need to serve the files through a web server.
-
-#### Option 1: Using Python (if available)
-```bash
-python -m http.server 3000
-```
-Then visit http://localhost:3000
-
-#### Option 2: Using Node.js http-server
-```bash
-npx http-server -p 3000
-```
-Then visit http://localhost:3000
-
-#### Option 3: Using Live Server (VS Code extension)
-If you use VS Code, install the "Live Server" extension and click "Go Live"
-
-## Project Structure
-- `index.html` - Main HTML file
-- `config.js` - Supabase configuration (update with your credentials)
-- `app.js` - Main React application
-- `/supabase-functions` - M-Pesa payment processing functions
-- `/supabase/migrations` - Database schema
-
-## How It Works
-1. The app connects to your Supabase database for data storage
-2. Real-time subscriptions keep data in sync across all connected devices
-3. M-Pesa payments are processed through Safaricom's Daraja API via Supabase Edge Functions
-4. All data is stored securely in your Supabase project
-
-## Default Login Credentials
-After setting up your Supabase database with the default data:
-- Admin: PIN `1234`
-- Cashier Grace: PIN `1111`
-- Cashier Kevin: PIN `2222`
+- Data lives in your Supabase project; realtime subscriptions keep every device in sync.
+- The app keeps the last 90 days of sales in memory, plus any unpaid account sales of any age.
+  Older sales load on demand ("Load full history" in the admin Sales tab).
+- Staff PINs are checked on the server, never in the browser (`staff-login`, `staff-admin`).
+- Card payments use Paystack's popup; M-Pesa prompts use the `mpesa-stk-push` function;
+  payments made straight to the till can be picked up automatically (`TILL-PAYMENTS-SETUP.md`).
 
 ## Customization
-- Modify `DEFAULT_INVENTORY` in `app.js` to change initial products
-- Modify `DEFAULT_STAFF` in `app.js` to add/remove staff
-- Modify `DEFAULT_SETTINGS` in `app.js` to change pharmacy name, currency, or tax rate
 
-## Browser Support
-Works in all modern browsers (Chrome, Firefox, Safari, Edge)
-Requires JavaScript and ES6 module support.
-
-## Notes
-- The first time you run the app, it will create default data in your Supabase database
-- Data persists in your Supabase project, so closing the browser won't lose your data
-- Multiple devices can connect to the same instance for real-time collaboration
+Starting products, staff and settings are `DEFAULT_INVENTORY`, `DEFAULT_STAFF` and
+`DEFAULT_SETTINGS` near the top of `app.js`. They only apply the first time the app runs
+against an empty database.

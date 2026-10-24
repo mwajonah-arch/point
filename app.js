@@ -365,7 +365,26 @@ function rowToSale(r) {
   return r.data;
 }
 
-async function getSalesRows() {
+// How much sales history the app keeps in memory by default. Supabase returns
+// at most 1000 rows per request, so the old "fetch everything" call quietly
+// dropped the NEWEST sales once a shop passed 1000 sales. Now we fetch the
+// recent window in pages, plus any still-unpaid account sales older than that
+// (those must always be visible so debts never go missing).
+const SALES_WINDOW_DAYS = 90;
+
+async function fetchAllPages(makeQuery) {
+  const PAGE = 1000;
+  let rows = [];
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await makeQuery().range(from, from + PAGE - 1);
+    if (error) throw error;
+    rows = rows.concat(data || []);
+    if (!data || data.length < PAGE) break;
+  }
+  return rows;
+}
+
+async function getSalesRows(windowDays = SALES_WINDOW_DAYS) {
   // Same dirty-first pattern as getInventoryRows: while there's an
   // unsynced local sale action queued (see flushPendingSyncActions),
   // trust what's on screen instead of overwriting it with a server read
@@ -375,9 +394,26 @@ async function getSalesRows() {
     if (cached !== null) return cached;
   }
   try {
-    const { data, error } = await supabase.from('sales').select('*').order('created_at', { ascending: true });
-    if (error) throw error;
-    const sales = (data || []).map(rowToSale);
+    const since = windowDays ? new Date(Date.now() - windowDays * 86400000).toISOString() : null;
+    const recentRows = await fetchAllPages(() => {
+      let q = supabase.from('sales').select('data, created_at').order('created_at', { ascending: true });
+      if (since) q = q.gte('created_at', since);
+      return q;
+    });
+    let olderUnpaid = [];
+    if (since) {
+      try {
+        olderUnpaid = await fetchAllPages(() => supabase.from('sales').select('data, created_at')
+          .lt('created_at', since).eq('data->>paymentMethod', 'account').eq('data->>settled', 'false')
+          .order('created_at', { ascending: true }));
+      } catch (e) { console.error('older unpaid account sales read failed', e); }
+    }
+    const seen = new Set();
+    const sales = [...olderUnpaid, ...recentRows].map(rowToSale).filter((s) => {
+      if (!s || (s.id && seen.has(s.id))) return false;
+      if (s.id) seen.add(s.id);
+      return true;
+    });
     writeCache('sales', sales);
     return sales;
   } catch (e) {
@@ -2368,6 +2404,9 @@ const MPESA_CODE_RE = /^[A-Z0-9]{10}$/;
 // the M-Pesa statement.
 const TILL_MANUAL_FLAG = 'till-manual';
 const isManualTillSale = (sale) => !!sale && sale.paymentTxnId === TILL_MANUAL_FLAG;
+// Till payment picked from the automatic feed (Safaricom told us about it).
+const TILL_AUTO_FLAG = 'till-auto';
+const isAutoTillSale = (sale) => !!sale && sale.paymentTxnId === TILL_AUTO_FLAG;
 
 // 0712…, 0112…, 712…, 254712…, +254712… → "254712345678"; null if not a valid mobile number.
 function normalizeKenyaMobile(raw) {
@@ -2401,6 +2440,8 @@ function CheckoutModal({ cart, subtotal, tax, total, settings, sales = [], onClo
   const [tillCode, setTillCode] = useState('');
   const [tillAmount, setTillAmount] = useState(String(total));
   const [tillChecked, setTillChecked] = useState(false);
+  const [tillPicked, setTillPicked] = useState(null); // trans_id chosen from the automatic feed
+  const [tillFeed, setTillFeed] = useState({ rows: [], ok: false });
 
   const pollTimer = useRef(null);
   const doneRef = useRef(false);
@@ -2562,9 +2603,54 @@ function CheckoutModal({ cart, subtotal, tax, total, settings, sales = [], onClo
   const amountOk = paidNum > 0 && shortBy < 0.005;
   const tillReady = codeFormatOk && !usedSale && amountOk && tillChecked;
 
+  const autoPicked = !!tillPicked && tillPicked === code;
   const recordTillPayment = () => finish({
-    method: 'mpesa', tendered: paidNum, change: 0, mpesaReceipt: code, paymentTxnId: TILL_MANUAL_FLAG,
+    method: 'mpesa', tendered: paidNum, change: 0, mpesaReceipt: code,
+    paymentTxnId: autoPicked ? TILL_AUTO_FLAG : TILL_MANUAL_FLAG,
   });
+
+  // Live feed of payments Safaricom has reported for the till (last 3 hours).
+  // If the table or function isn't set up, the list quietly stays hidden and
+  // typing a code still works.
+  const tillTabOpen = method === 'mpesa' && mpesaMode === 'till';
+  useEffect(() => {
+    if (!tillTabOpen) return undefined;
+    let cancelled = false;
+    const since = () => new Date(Date.now() - 3 * 3600 * 1000).toISOString();
+    (async () => {
+      const { data, error } = await supabase.from('till_payments')
+        .select('trans_id, amount, payer_name, created_at')
+        .gte('created_at', since()).order('created_at', { ascending: false }).limit(40);
+      if (!cancelled && !error) setTillFeed({ rows: data || [], ok: true });
+    })();
+    const channel = supabase.channel('till_payments_feed')
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'till_payments' }, (payload) => {
+        if (cancelled || !payload.new) return;
+        setTillFeed((f) => (f.rows.some((r) => r.trans_id === payload.new.trans_id)
+          ? f : { rows: [payload.new, ...f.rows], ok: true }));
+      })
+      .subscribe();
+    return () => { cancelled = true; supabase.removeChannel(channel); };
+  }, [tillTabOpen]);
+
+  const usedCodes = useMemo(() => {
+    const set = new Set();
+    for (const s of sales) {
+      [s.mpesaReceipt, s.paymentRef].forEach((r) => { if (r) set.add(String(r).toUpperCase()); });
+    }
+    return set;
+  }, [sales]);
+  const tillOptions = useMemo(() => {
+    const open = tillFeed.rows.filter((r) => !usedCodes.has(String(r.trans_id).toUpperCase()));
+    const exact = (r) => Math.abs(Number(r.amount) - total) < 0.005;
+    return [...open.filter(exact), ...open.filter((r) => !exact(r))].map((r) => ({ ...r, exact: exact(r) }));
+  }, [tillFeed, usedCodes, total]);
+  const pickTillPayment = (r) => {
+    setTillCode(String(r.trans_id).toUpperCase());
+    setTillAmount(String(r.amount));
+    setTillChecked(true);
+    setTillPicked(String(r.trans_id).toUpperCase());
+  };
 
   /* ----- the one primary action in the footer ----- */
   let primary = null;
@@ -2761,10 +2847,40 @@ function CheckoutModal({ cart, subtotal, tax, total, settings, sales = [], onClo
                       Use this when the customer paid your till before you sent a request. Don't send a prompt as well, or they'll pay twice.
                     </p>
 
-                    <label className="pco-label" htmlFor="pco-code">M-Pesa confirmation code</label>
+                    {tillFeed.ok && (
+                      <div style={{ marginBottom: 14 }}>
+                        <div className="pco-label">Payments received at the till</div>
+                        {tillOptions.length === 0 ? (
+                          <p className="pco-help">Nothing new yet. A payment appears here within seconds of the customer paying.</p>
+                        ) : (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 190, overflowY: 'auto' }} className="pos-scroll">
+                            {tillOptions.map((r) => {
+                              const selected = tillPicked === String(r.trans_id).toUpperCase();
+                              return (
+                                <button key={r.trans_id} type="button" onClick={() => pickTillPayment(r)}
+                                  style={{
+                                    display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, textAlign: 'left',
+                                    padding: '9px 12px', borderRadius: 10, background: selected ? 'var(--pine-pale)' : '#fff',
+                                    border: '1px solid ' + (selected ? 'var(--pine)' : 'var(--border)'), fontSize: 13,
+                                  }}>
+                                  <span style={{ minWidth: 0 }}>
+                                    <span style={{ fontWeight: 600 }}>{r.payer_name || 'Customer'}</span>
+                                    <span style={{ color: 'var(--muted)' }}> · {new Date(r.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                                    {r.exact && <span style={{ marginLeft: 6, color: 'var(--pine)', fontWeight: 600 }}>matches total</span>}
+                                  </span>
+                                  <span className="pos-mono" style={{ fontWeight: 600, whiteSpace: 'nowrap' }}>{money(Number(r.amount))}</span>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    <label className="pco-label" htmlFor="pco-code">{tillFeed.ok ? 'Or type the confirmation code' : 'M-Pesa confirmation code'}</label>
                     <input id="pco-code" className="pco-input pos-mono pco-code" autoFocus autoComplete="off" autoCapitalize="characters" spellCheck={false}
                       maxLength={10} value={tillCode} placeholder="e.g. SGH7K2L9QX"
-                      onChange={(e) => setTillCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ''))}
+                      onChange={(e) => { setTillCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '')); setTillPicked(null); }}
                       aria-invalid={code.length === 10 && (!codeFormatOk || !!usedSale)} />
                     {usedSale ? (
                       <p className="pco-msg pco-msg-bad" role="alert">
@@ -2782,11 +2898,17 @@ function CheckoutModal({ cart, subtotal, tax, total, settings, sales = [], onClo
                     {shortBy >= 0.005 && <p className="pco-msg pco-msg-bad">Short by {money(shortBy)}. The full {money(total)} must be received to complete this sale.</p>}
                     {overBy >= 0.005 && <p className="pco-msg pco-msg-warn">{money(overBy)} more than the total was paid. The sale is recorded at {money(total)}; sort out the difference with the customer.</p>}
 
-                    <label className={'pco-check' + (tillChecked ? ' pco-check-on' : '')}>
-                      <input type="checkbox" checked={tillChecked} onChange={(e) => setTillChecked(e.target.checked)} />
-                      <span>I've confirmed this payment on the till's phone or M-Pesa statement, not only from the customer's message.</span>
-                    </label>
-                    <p className="pco-help">Saved as a manual till payment so it can be matched against your M-Pesa statement later.</p>
+                    {autoPicked ? (
+                      <p className="pco-msg pco-msg-ok"><Check size={13} /> Reported by M-Pesa as paid to your till. No further check needed.</p>
+                    ) : (
+                      <>
+                        <label className={'pco-check' + (tillChecked ? ' pco-check-on' : '')}>
+                          <input type="checkbox" checked={tillChecked} onChange={(e) => setTillChecked(e.target.checked)} />
+                          <span>I've confirmed this payment on the till's phone or M-Pesa statement, not only from the customer's message.</span>
+                        </label>
+                        <p className="pco-help">Saved as a manual till payment so it can be matched against your M-Pesa statement later.</p>
+                      </>
+                    )}
                   </>
                 )}
               </div>
@@ -3050,7 +3172,7 @@ function ReceiptModal({ sale, settings, onClose }) {
           <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--muted)' }}><span>Change</span><span>{formatMoney(sale.change, settings.currency)}</span></div>
         )}
         {sale.paymentMethod === 'mpesa' && sale.mpesaReceipt && (
-          <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--muted)' }}><span>M-Pesa receipt{isManualTillSale(sale) ? ' (paid at till)' : ''}</span><span>{sale.mpesaReceipt}</span></div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--muted)' }}><span>M-Pesa receipt{isManualTillSale(sale) || isAutoTillSale(sale) ? ' (paid at till)' : ''}</span><span>{sale.mpesaReceipt}</span></div>
         )}
         {sale.paymentMethod === 'card' && sale.paymentRef && (
           <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--muted)', gap: 10 }}><span>Card ref</span><span style={{ wordBreak: 'break-all', textAlign: 'right' }}>{sale.paymentRef}</span></div>
@@ -3078,7 +3200,8 @@ function ReceiptModal({ sale, settings, onClose }) {
 /* ---------------------------------------------------------------------- */
 
 function AdminConsole({ inventory, sales, staffList, settings, user, onLogout, lastSynced,
-  saveInventory, adjustStockBy, saveStaff, saveSettings, inventoryLog, logInventoryChange, voidSale, settleAccountSale }) {
+  saveInventory, adjustStockBy, saveStaff, saveSettings, inventoryLog, logInventoryChange, voidSale, settleAccountSale,
+  salesLimitedDays, onLoadFullSales }) {
   const [tab, setTab] = useState('dashboard');
   // Lets the dashboard open Inventory already filtered (e.g. "needs
   // reordering", or one product searched). `n` re-mounts the tab so the
@@ -3124,7 +3247,7 @@ function AdminConsole({ inventory, sales, staffList, settings, user, onLogout, l
           {tab === 'dashboard' && <DashboardTab inventory={inventory} sales={sales} settings={settings} onNavigate={openTab} />}
           {tab === 'inventory' && <InventoryTab key={invJump ? invJump.n : 'inv'} initialFilter={invJump && invJump.filter} initialQuery={invJump && invJump.query} inventory={inventory} settings={settings} saveInventory={saveInventory} adjustStockBy={adjustStockBy} user={user} logInventoryChange={logInventoryChange} />}
           {tab === 'activity' && <ActivityTab inventoryLog={inventoryLog} settings={settings} />}
-          {tab === 'sales' && <SalesTab sales={sales} inventory={inventory} settings={settings} voidSale={voidSale} />}
+          {tab === 'sales' && <SalesTab sales={sales} inventory={inventory} settings={settings} voidSale={voidSale} limitedDays={salesLimitedDays} onLoadFull={onLoadFullSales} />}
           {tab === 'accounts' && <AccountsTab sales={sales} settings={settings} settleAccountSale={settleAccountSale} />}
           {tab === 'staff' && <StaffTab staffList={staffList} saveStaff={saveStaff} sales={sales} settings={settings} />}
           {tab === 'settings' && <SettingsTab settings={settings} saveSettings={saveSettings} />}
@@ -4240,7 +4363,6 @@ const ACTIVITY_KIND_META = {
   till:   { label: 'Paid at till', color: 'var(--amber)', bg: 'var(--amber-pale)', Icon: Smartphone,   loud: true },
 };
 // Kept for any older code that still refers to it.
-const ACTIVITY_ACTION_META = ACTIVITY_KIND_META;
 
 function activityKind(e) {
   if (e.action === 'edit') {
@@ -4416,6 +4538,12 @@ function ActivityTab({ inventoryLog, settings }) {
       </div>
 
       {/* Filters */}
+      {limitedDays && onLoadFull && (range === 'all' || range === 'custom') && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', fontSize: 13, color: 'var(--muted)', marginBottom: 10 }}>
+          <span>Showing the last {limitedDays} days of sales, plus any unpaid account sales.</span>
+          <button type="button" className="pcs-link" onClick={onLoadFull}>Load full history</button>
+        </div>
+      )}
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
         {[['today', 'Today'], ['7d', '7 days'], ['30d', '30 days'], ['all', 'All time']].map(([k, l]) => (
           <button key={k} onClick={() => pickRange(k)} style={range === k ? chipOn : chipBase}>{l}</button>
@@ -4516,7 +4644,7 @@ function ActivityTab({ inventoryLog, settings }) {
 
 const PAYMENT_LABELS = { cash: 'Cash', mpesa: 'M-Pesa', card: 'Card', account: 'On account' };
 
-function SalesTab({ sales, inventory, settings, voidSale }) {
+function SalesTab({ sales, inventory, settings, voidSale, limitedDays, onLoadFull }) {
   const currency = settings.currency;
   const PAGE = 40;
   const [range, setRange] = useState('7d'); // today | 7d | 30d | all | custom
@@ -4697,7 +4825,7 @@ function SalesTab({ sales, inventory, settings, voidSale }) {
                           <span>{i.qty} x {i.name}</span><span className="pos-mono">{formatMoney(i.price * i.qty, currency)}</span>
                         </div>
                       ))}
-                      <div style={{ marginTop: 4 }}>Rung up by {s.cashier} · paid via {PAYMENT_LABELS[s.paymentMethod] || s.paymentMethod}{s.customerName ? ` — ${s.customerName}` : ''}{s.mpesaReceipt ? ` (${s.mpesaReceipt})` : ''}{isManualTillSale(s) ? ' — paid at till, entered by hand' : ''}{s.paymentRef ? ` (${s.paymentRef})` : ''}</div>
+                      <div style={{ marginTop: 4 }}>Rung up by {s.cashier} · paid via {PAYMENT_LABELS[s.paymentMethod] || s.paymentMethod}{s.customerName ? ` — ${s.customerName}` : ''}{s.mpesaReceipt ? ` (${s.mpesaReceipt})` : ''}{isManualTillSale(s) ? ' — paid at till, entered by hand' : ''}{isAutoTillSale(s) ? ' — paid at till, confirmed automatically' : ''}{s.paymentRef ? ` (${s.paymentRef})` : ''}</div>
                       {!s.voided && lineProfit.known > 0 && <div style={{ marginTop: 2 }}>Profit <b className="pos-mono" style={{ color: lineProfit.profit < 0 ? 'var(--red)' : 'var(--pine)' }}>{formatMoney(lineProfit.profit, currency)}</b> (excl. VAT)</div>}
                       {s.voided && <div style={{ marginTop: 4, color: 'var(--red)' }}>Voided by {s.voidedBy} on {new Date(s.voidedAt).toLocaleString()}{s.voidReason ? `: ${s.voidReason}` : ''}</div>}
                       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
@@ -5451,12 +5579,34 @@ function App() {
 
   const refreshPending = () => setPendingCount(getDirtyKeys().length + getPendingSyncActions().length);
 
+  // Only one reload runs at a time; anything that asks while one is running
+  // is folded into a single follow-up. Before, one sale fired several parallel
+  // full reloads and an older response could overwrite a newer one.
+  const loadingRef = useRef(false);
+  const loadQueuedRef = useRef(false);
+  const salesDaysRef = useRef(SALES_WINDOW_DAYS);
+  const [salesLimited, setSalesLimited] = useState(true);
+  const loadFullSales = () => { salesDaysRef.current = null; setSalesLimited(false); loadAll(); };
+
   const loadAll = useCallback(async () => {
+    if (loadingRef.current) { loadQueuedRef.current = true; return; }
+    loadingRef.current = true;
+    try {
+      do {
+        loadQueuedRef.current = false;
+        await loadAllOnce();
+      } while (loadQueuedRef.current);
+    } finally {
+      loadingRef.current = false;
+    }
+  }, []);
+
+  const loadAllOnce = async () => {
     await flushDirtyKeys();
     await flushPendingSyncActions();
     const [inv, sls, stf, cfg, invLog] = await Promise.all([
       getInventoryRows(),
-      getSalesRows(),
+      getSalesRows(salesDaysRef.current),
       getOrInit('staff', DEFAULT_STAFF),
       getOrInit('settings', DEFAULT_SETTINGS),
       getActivityRows(),
@@ -5465,32 +5615,37 @@ function App() {
     setLastSynced(new Date().toLocaleTimeString());
     refreshPending();
     setReady(true);
-  }, []);
+  };
 
   useEffect(() => {
     loadAll();
+
+    // A burst of change events (one sale touches sales + inventory + log)
+    // becomes one reload, a fraction of a second later.
+    let kickTimer = null;
+    const kick = () => { clearTimeout(kickTimer); kickTimer = setTimeout(loadAll, 400); };
+    let realtimeUp = false;
 
     // Instant sync: any device that writes to kv_store, inventory, or
     // sales pushes an update here.
     const channel = supabase
       .channel('kv_store_changes')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'kv_store' }, () => {
-        loadAll();
-      })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'inventory' }, () => {
-        loadAll();
-      })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'sales' }, () => {
-        loadAll();
-      })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'activity_log' }, () => {
-        loadAll();
-      })
-      .subscribe();
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'kv_store' }, kick)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'inventory' }, kick)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'sales' }, kick)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'activity_log' }, kick)
+      .subscribe((status) => { realtimeUp = status === 'SUBSCRIBED'; });
 
     // Slow fallback poll — also doubles as the offline retry loop, in case
     // realtime and the 'online' browser event both miss a reconnect.
-    pollRef.current = setInterval(loadAll, 15000);
+    // While realtime is connected this only runs as a once-a-minute safety net;
+    // if realtime is down it keeps the old 15s pace. Hidden tabs skip it.
+    let tick = 0;
+    pollRef.current = setInterval(() => {
+      if (document.hidden) return;
+      tick += 1;
+      if (!realtimeUp || tick % 4 === 0) loadAll();
+    }, 15000);
 
     // React immediately when the browser regains a connection, instead of
     // waiting for the next poll.
@@ -5499,6 +5654,7 @@ function App() {
 
     return () => {
       clearInterval(pollRef.current);
+      clearTimeout(kickTimer);
       supabase.removeChannel(channel);
       window.removeEventListener('online', handleOnline);
     };
@@ -5973,7 +6129,8 @@ function App() {
         user={user} onLogout={handleLogout} lastSynced={lastSynced}
         saveInventory={saveInventoryAdmin} adjustStockBy={adjustStockBy} saveStaff={saveStaffList} saveSettings={saveSettingsFn}
         inventoryLog={inventoryLog} logInventoryChange={logInventoryChange}
-        voidSale={voidSale} settleAccountSale={settleAccountSale} />
+        voidSale={voidSale} settleAccountSale={settleAccountSale}
+        salesLimitedDays={salesLimited ? SALES_WINDOW_DAYS : null} onLoadFullSales={loadFullSales} />
     );
   }
 

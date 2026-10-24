@@ -1,26 +1,44 @@
-// Medipoint has no real bundling step by design (app.js runs straight in
-// the browser via Babel + esm.sh, on purpose — see README "Run the
-// Application"). "dist/" just needs to be an exact, up-to-date copy of the
-// files a static host (like GitHub Pages) should serve.
+// Builds dist/ for deployment (Netlify runs `npm run build`).
 //
-// Previously dist/ was hand-copied and quietly drifted out of sync with
-// app.js (missing icons, a missing `memo` import). This script removes the
-// manual-copy step entirely — run `npm run build` before every deploy and
-// dist/ will always match the source exactly.
+// During development index.html compiles app.js in the browser with Babel, which
+// is convenient but slow: every visit downloads the compiler and recompiles the
+// whole app. This script compiles ONCE here instead, so visitors just download
+// a small, minified app.js. React, Supabase etc. are still loaded from esm.sh at
+// runtime, exactly as before (they're left as external imports).
 
 const fs = require('fs');
 const path = require('path');
+const esbuild = require('esbuild');
 
 const root = __dirname;
 const dist = path.join(root, 'dist');
 
-// Start clean so no stale files (like the old hashed CSS asset) linger.
 fs.rmSync(dist, { recursive: true, force: true });
 fs.mkdirSync(dist);
 
-const filesToCopy = ['app.js', 'config.js', 'index.html'];
-for (const file of filesToCopy) {
-  fs.copyFileSync(path.join(root, file), path.join(dist, file));
-}
+esbuild.buildSync({
+  entryPoints: [path.join(root, 'app.js')],
+  outfile: path.join(dist, 'app.js'),
+  bundle: true,
+  minify: true,
+  format: 'esm',
+  loader: { '.js': 'jsx' },
+  external: ['https://*'],
+  logLevel: 'warning',
+});
 
-console.log(`Copied ${filesToCopy.join(', ')} into dist/ — ready to deploy.`);
+// dist/index.html: drop the in-browser compiler and load the compiled file.
+let html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
+const before = html;
+html = html
+  .replace(/\s*<!-- Lets the browser run JSX[\s\S]*?-->/, '')
+  .replace(/\s*<script src="https:\/\/unpkg\.com\/@babel\/standalone[^>]*><\/script>/, '')
+  .replace(/<script type="text\/babel"[^>]*src="app\.js"><\/script>/, '<script type="module" src="app.js"></script>');
+if (html === before || html.includes('babel')) {
+  throw new Error('index.html no longer matches what build.js expects (Babel tags). Update build.js.');
+}
+fs.writeFileSync(path.join(dist, 'index.html'), html);
+fs.copyFileSync(path.join(root, 'config.js'), path.join(dist, 'config.js'));
+
+const kb = (f) => (fs.statSync(path.join(dist, f)).size / 1024).toFixed(0) + ' KB';
+console.log(`dist/ ready: app.js ${kb('app.js')}, index.html ${kb('index.html')}`);
